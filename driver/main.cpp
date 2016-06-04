@@ -320,6 +320,8 @@ Ast_Expression *Jai_Parser::parse_expression() {
       fc->params.push(parse_expression());
       if (tok.Type != token::COMMA)
         break;
+      else
+        match_token(token::COMMA);
     }
     match_token(token::RIGHT_PAREN);
     return fc;
