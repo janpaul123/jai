@@ -130,9 +130,12 @@ struct Ast_Ident : public Ast {
   char *my_name;
 };
 
+const int AST_STATEMENT_DEFER = (1 << 0);
+
 struct Ast_Statement : public Ast {
   Ast_Statement() { type = AST_STATEMENT; }
   Array<Ast_Statement *> compound_stmts;
+  int flags = 0;
 };
 
 struct Ast_Expression : public Ast_Statement {
@@ -188,6 +191,7 @@ struct Ast_Lambda : public Ast_Declaration {
   Ast_Lambda() { type = AST_LAMDA; }
   Array<Ast_Declaration *> params;
   Array<Ast_Statement *> statements;
+  Array<Ast_Statement *> deferd_statements;
 };
 
 struct Ast_Translation_Unit : public Ast {
@@ -204,7 +208,7 @@ struct Jai_Parser {
   Ast_Primary_Expression *parse_primary_expression();
   Ast_Statement *parse_statement();
   Ast_Type_Info *parse_type();
-  Ast_Lambda *parse_lambda_prototype();
+  Ast_Lambda *parse_lambda_definition();
   Ast_Expression *parse_expression();
   Ast_Ident *parse_ident();
   Ast_Declaration *parse_external_declaration();
@@ -247,7 +251,7 @@ Ast_Type_Info *Jai_Parser::parse_type() {
   return info;
 }
 
-Ast_Lambda *Jai_Parser::parse_lambda_prototype() {
+Ast_Lambda *Jai_Parser::parse_lambda_definition() {
   Ast_Lambda *lamda = AST_NEW(Ast_Lambda);
   match_token(token::LEFT_PAREN);
   while (tok.Type != token::RIGHT_PAREN) {
@@ -263,7 +267,12 @@ Ast_Lambda *Jai_Parser::parse_lambda_prototype() {
   if (tok.Type == token::LEFT_BRACE) {
     match_token(token::LEFT_BRACE);
     while (tok.Type != token::RIGHT_BRACE) {
-      lamda->statements.push(parse_statement());
+      auto stmt = parse_statement();
+      if (stmt->flags & AST_STATEMENT_DEFER) {
+        lamda->deferd_statements.push(stmt);
+      } else {
+        lamda->statements.push(stmt);
+      }
     }
     match_token(token::RIGHT_BRACE);
   } else {
@@ -340,7 +349,10 @@ Ast_Statement *Jai_Parser::parse_statement() {
   } else if (tok.Type == token::RETURN) {
 
   } else if (tok.Type == token::DEFER) {
-
+    match_token(token::DEFER);
+    auto stmt = parse_statement();
+    stmt->flags |= AST_STATEMENT_DEFER;
+    return stmt;
   } else if (tok.Type == token::FOR) {
 
   } else {
@@ -376,7 +388,7 @@ Ast_Declaration *Jai_Parser::parse_external_declaration() {
       if (tok.Type == token::ARROW) {
         tok = saved_tok;
         *lex = saved_lex;
-        Ast_Lambda *lamda = parse_lambda_prototype();
+        Ast_Lambda *lamda = parse_lambda_definition();
         lamda->my_ident = decl->my_ident;
         AST_DELETE(decl);
         return lamda;
@@ -502,6 +514,8 @@ void C_Converter::emit_ident(Ast_Ident *ident, std::ostream &os) {
 
 void C_Converter::emit_translation_unit(Ast_Translation_Unit *tu,
                                         std::ostream &os) {
+  os.precision(5);
+  os << std::fixed;
   os << "/* machinamentum jai compiler v0.0.1 */" << std::endl;
   os << "#include <stdint.h>" << std::endl;
   os << "typedef int32_t s32;" << std::endl;
@@ -521,6 +535,9 @@ void C_Converter::emit_translation_unit(Ast_Translation_Unit *tu,
       os << "{" << std::endl;
       for (int i = 0; i < lamda->statements.count; ++i) {
         emit_statement(lamda->statements.array[i], os);
+      }
+      for (int i = lamda->deferd_statements.count - 1; i >= 0; --i) {
+        emit_statement(lamda->deferd_statements.array[i], os);
       }
       os << "}" << std::endl;
     }
