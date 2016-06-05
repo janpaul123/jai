@@ -1,6 +1,15 @@
 #include "lexer.h"
 #include <cstdlib>
 #include <cstring>
+#include <sstream>
+
+namespace std {
+template <typename T> string to_string(T Value) {
+  stringstream ss;
+  ss << Value;
+  return ss.str();
+}
+};
 
 token lexer_state::GetToken() { return LexerGetToken(this); }
 
@@ -40,7 +49,7 @@ token LexerGetToken(lexer_state *State) {
   token ReturnToken;
 
   auto IsWhiteSpace = [](char C) {
-    return (C == ' ') || (C == '\n') || (C == '\t') || (C == '\r') ||
+    return (C == ' ') || (C == '\t') || (C == '\r') ||
            (C == '\f');
   };
 
@@ -53,6 +62,9 @@ _CheckWhiteSpace:
     if (Current[0] == '\n') {
       ++State->LineCurrent;
       State->OffsetCurrent = 0;
+      ReturnToken.Type = token::NEWLINE;
+      ++Current;
+      goto _Exit;
     }
     ++Current;
   }

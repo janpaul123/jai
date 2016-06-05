@@ -4,13 +4,8 @@
 
 #include "symbol.h"
 
-#include <sstream>
 namespace std {
-template <typename T> string to_string(T Value) {
-  stringstream ss;
-  ss << Value;
-  return ss.str();
-}
+template <typename T> string to_string(T Value);
 };
 
 struct token {
@@ -40,6 +35,8 @@ struct token {
     CARET = '^',
     AMPERSAND = '&',
     QUESTION = '?',
+    HASH = '#',
+    NEWLINE = '\n',
 
     END = 255,
 

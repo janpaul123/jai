@@ -199,6 +199,99 @@ struct Ast_Translation_Unit : public Ast {
   Array<Ast_Declaration *> declarations;
 };
 
+#include <dlfcn.h>
+
+struct Jai_Interpreter {
+  enum {
+    COM_NOP = 0,
+    COM_PUSH,
+    COM_POP,
+    COM_CALL_JAI,
+    COM_CALL_NATIVE,
+
+  };
+
+  struct Jai_Command {
+    char type;
+    union {
+      int int32;
+      void *ptr;
+      Ast_Lambda *func;
+      float float32;
+    };
+  };
+
+  Array<Jai_Command> cmd_qeue;
+  Array<void *> linked_libs;
+
+  Jai_Interpreter() { load_library(nullptr); }
+
+  void *find_symbol(const char *sym_name);
+  void *find_symbol_in_lib(void *lib_handle, const char *sym_name);
+  void *load_library(const char *libname);
+  void translate_function(Ast_Lambda *lamda);
+  void run_function(Ast_Lambda *lamda);
+};
+
+extern "C" {
+void test() { printf("I am native code!\n"); }
+};
+
+void *Jai_Interpreter::find_symbol(const char *sym_name) {
+  for (int i = 0; i < linked_libs.count; ++i) {
+    if (!linked_libs.array[i])
+      continue;
+    void *ptr = find_symbol_in_lib(linked_libs.array[i], sym_name);
+    if (ptr) {
+      printf("found symbol %s\n", sym_name);
+      return ptr;
+    }
+  }
+  printf("Couldn't find symbol %s\n", sym_name);
+  return nullptr;
+}
+
+void *Jai_Interpreter::find_symbol_in_lib(void *lib_handle,
+                                          const char *sym_name) {
+  return dlsym(lib_handle, sym_name);
+}
+
+void *Jai_Interpreter::load_library(const char *libname) {
+  void *lib = dlopen(libname, RTLD_LAZY);
+  if (!lib) {
+    printf("couldn't open lib %s\n", libname);
+  }
+  linked_libs.push(lib);
+  return lib;
+}
+
+void Jai_Interpreter::translate_function(Ast_Lambda *lamda) {
+  for (int i = 0; i < lamda->statements.count; ++i) {
+    auto stmt = lamda->statements.array[i];
+    if (stmt->type == AST_FUNCTION_CALL) {
+      auto fc = static_cast<Ast_Function_Call *>(stmt);
+      Jai_Command cmd;
+      cmd.type = COM_CALL_NATIVE;
+      cmd.ptr = find_symbol(fc->my_ident->my_name);
+      cmd_qeue.push(cmd);
+    }
+  }
+}
+
+void Jai_Interpreter::run_function(Ast_Lambda *lamda) {
+  translate_function(lamda);
+  for (int i = 0; i < cmd_qeue.count; ++i) {
+    auto cmd = cmd_qeue.array[i];
+    switch (cmd.type) {
+    case COM_CALL_NATIVE: {
+      void (*func_ptr)() = (void (*)())(cmd.ptr);
+      func_ptr();
+      break;
+    }
+    }
+  }
+}
+
 struct Jai_Parser {
   lexer_state *lex;
   token tok;
@@ -221,6 +314,13 @@ void Jai_Parser::match_token(int type) {
            TokenToString(type).c_str(), TokenToString(tok).c_str());
   }
   tok = lex->GetToken();
+
+  while (tok.Type == token::NEWLINE) {
+    tok = lex->GetToken();
+    if (tok.Type == token::HASH) {
+      // preprocessor
+    }
+  }
 }
 
 Ast_Type_Info *Jai_Parser::parse_type() {
@@ -414,7 +514,7 @@ Ast_Translation_Unit *Jai_Parser::parse_translation_unit(lexer_state *L) {
   Ast_Translation_Unit *trans_unit = AST_NEW(Ast_Translation_Unit);
   Jai_Parser parser;
   parser.lex = L;
-  parser.tok = L->GetToken();
+  parser.match_token(parser.tok.Type);
   while (parser.tok.Type != token::END) {
     trans_unit->declarations.push(parser.parse_external_declaration());
   }
@@ -583,5 +683,7 @@ int main(int argc, char **argv) {
     Ast_Declaration *decl = trans_unit->declarations.array[i];
   }
   C_Converter::emit_translation_unit(trans_unit, std::cout);
+  Jai_Interpreter interp;
+  interp.run_function(static_cast<Ast_Lambda *>(trans_unit->declarations.array[0]));
   return 0;
 }
