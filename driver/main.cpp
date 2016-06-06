@@ -84,6 +84,8 @@ enum Ast_Type {
   AST_ITERATION_STATEMENT,
   AST_FUNCTION_CALL,
   AST_PRIMARY_EXPRESSION,
+
+  AST_HASH_RUN,
 };
 
 struct Ast {
@@ -194,9 +196,28 @@ struct Ast_Lambda : public Ast_Declaration {
   Array<Ast_Statement *> deferd_statements;
 };
 
+struct Ast_Hash_Directive : public Ast {
+  Ast_Ident *ident;
+};
+
+struct Ast_Hash_Run : public Ast_Hash_Directive {
+  Ast_Hash_Run() { type = AST_HASH_RUN; }
+  Ast_Function_Call *fc;
+};
+
 struct Ast_Translation_Unit : public Ast {
   Ast_Translation_Unit() { type = AST_TRANSLATION_UNIT; }
   Array<Ast_Declaration *> declarations;
+  Array<Ast_Hash_Directive *> hashes;
+
+  Ast_Lambda *lookup_function(const char *name) {
+    for (int i = 0; i < declarations.count; ++i) {
+      auto decl = declarations.array[i];
+      if (decl->type == AST_LAMDA && strcmp(decl->my_ident->my_name, name) == 0)
+        return static_cast<Ast_Lambda *>(decl);
+    }
+    return nullptr;
+  }
 };
 
 #include <dlfcn.h>
@@ -234,7 +255,7 @@ struct Jai_Interpreter {
 };
 
 extern "C" {
-void test() { printf("I am native code!\n"); }
+void compiler_test_message() { printf("I am compiler code!\n"); }
 };
 
 void *Jai_Interpreter::find_symbol(const char *sym_name) {
@@ -296,6 +317,7 @@ struct Jai_Parser {
   lexer_state *lex;
   token tok;
   char *filename;
+  Ast_Translation_Unit *root_node;
 
   void match_token(int type);
   Ast_Primary_Expression *parse_primary_expression();
@@ -318,7 +340,15 @@ void Jai_Parser::match_token(int type) {
   while (tok.Type == token::NEWLINE) {
     tok = lex->GetToken();
     if (tok.Type == token::HASH) {
-      // preprocessor
+      tok = lex->GetToken();
+      auto ident = parse_ident();
+      if (strcmp("run", ident->my_name) == 0) {
+        auto dir = AST_NEW(Ast_Hash_Run);
+        dir->fc = static_cast<Ast_Function_Call *>(parse_expression());
+        root_node->hashes.push(dir);
+      } else {
+        printf("unknown directive %s\n", ident->my_name);
+      }
     }
   }
 }
@@ -401,7 +431,7 @@ Ast_Primary_Expression *Jai_Parser::parse_primary_expression() {
     return pe;
   case token::DQSTRING: {
     pe->expr_type = AST_PT_STRING_LITERAL;
-    char *str = (char *)calloc(0, tok.Id.length() + 1);
+    char *str = (char *)calloc(1, tok.Id.length() + 1);
     memcpy(str, tok.Id.c_str(), tok.Id.length());
     pe->string_literal.array = str;
     pe->string_literal.count = tok.Id.length();
@@ -465,7 +495,7 @@ Ast_Statement *Jai_Parser::parse_statement() {
 
 Ast_Ident *Jai_Parser::parse_ident() {
   Ast_Ident *ident = AST_NEW(Ast_Ident);
-  char *name = (char *)calloc(0, tok.Id.length() + 1);
+  char *name = (char *)calloc(1, tok.Id.length() + 1);
   memcpy(name, tok.Id.c_str(), tok.Id.length());
   ident->my_name = name;
   match_token(token::IDENTIFIER);
@@ -515,6 +545,7 @@ Ast_Translation_Unit *Jai_Parser::parse_translation_unit(lexer_state *L) {
   Jai_Parser parser;
   parser.lex = L;
   parser.match_token(parser.tok.Type);
+  parser.root_node = trans_unit;
   while (parser.tok.Type != token::END) {
     trans_unit->declarations.push(parser.parse_external_declaration());
   }
@@ -679,11 +710,16 @@ int main(int argc, char **argv) {
   }
   LexerInit(&Lexer, Source, Source + Size, &SymbolTable);
   Ast_Translation_Unit *trans_unit = Jai_Parser::parse_translation_unit(&Lexer);
-  for (int i = 0; i < trans_unit->declarations.count; ++i) {
-    Ast_Declaration *decl = trans_unit->declarations.array[i];
-  }
   C_Converter::emit_translation_unit(trans_unit, std::cout);
   Jai_Interpreter interp;
-  interp.run_function(static_cast<Ast_Lambda *>(trans_unit->declarations.array[0]));
+  for (int i = 0; i < trans_unit->hashes.count; ++i) {
+    auto hash = trans_unit->hashes.array[i];
+    if (hash->type == AST_HASH_RUN) {
+      auto run = static_cast<Ast_Hash_Run *>(hash);
+      auto lamda = trans_unit->lookup_function(run->fc->my_ident->my_name);
+      printf("running function \"%s\"\n", lamda->my_ident->my_name);
+      interp.run_function(lamda);
+    }
+  }
   return 0;
 }
