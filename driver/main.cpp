@@ -85,6 +85,7 @@ enum Ast_Type {
   AST_EXPRESSION_STATEMENT,
   AST_FUNCTION_CALL,
   AST_PRIMARY_EXPRESSION,
+  AST_POSTFIX_EXPRESSION,
 
   AST_HASH_RUN,
 };
@@ -149,6 +150,19 @@ struct Ast_Expression : public Ast {
   Ast_Type_Info *inferred_type;
 };
 
+const int AST_PF_FIELD_SELECTION = 1;
+const int AST_PF_INC = 2;
+const int AST_PF_DEC = 3;
+const int AST_PF_INDEX = 4;
+
+struct Ast_Postfix_Expression : public Ast_Expression {
+  Ast_Postfix_Expression() { type = AST_POSTFIX_EXPRESSION; }
+  int flags = 0;
+  Ast_Expression *expr;
+  Ast_Expression *int_expr;
+  Ast_Ident *my_ident;
+};
+
 enum Primary_Type {
   AST_PT_CONST_INT,
   AST_PT_CONST_FLOAT,
@@ -157,19 +171,17 @@ enum Primary_Type {
   AST_PT_IDENTIFIER,
 };
 
-struct Ast_Primary_Expression : public Ast_Expression {
+struct Ast_Primary_Expression : public Ast_Postfix_Expression {
   Ast_Primary_Expression() { type = AST_PRIMARY_EXPRESSION; }
   Primary_Type expr_type;
   long int_const;
   double float_const;
   String string_literal;
   Ast_Ident *ident;
-  Ast_Expression *expr;
 };
 
-struct Ast_Function_Call : public Ast_Primary_Expression {
+struct Ast_Function_Call : public Ast_Postfix_Expression {
   Ast_Function_Call() { type = AST_FUNCTION_CALL; }
-  Ast_Ident *my_ident;
   Array<Ast_Expression *> params;
 };
 
@@ -326,6 +338,7 @@ struct Jai_Parser {
 
   void match_token(int type);
   Ast_Primary_Expression *parse_primary_expression();
+  Ast_Postfix_Expression *parse_postfix_expression();
   Ast_Statement *parse_statement();
   Ast_Type_Info *parse_type();
   Ast_Lambda *parse_lambda_definition();
@@ -447,21 +460,6 @@ Ast_Primary_Expression *Jai_Parser::parse_primary_expression() {
   case token::IDENTIFIER:
     pe->expr_type = AST_PT_IDENTIFIER;
     auto ident = parse_ident();
-    if (tok.Type == token::LEFT_PAREN) {
-      AST_DELETE(pe);
-      auto fc = AST_NEW(Ast_Function_Call);
-      fc->my_ident = ident;
-      match_token(token::LEFT_PAREN);
-      while (tok.Type != token::RIGHT_PAREN) {
-        fc->params.push(parse_expression());
-        if (tok.Type != token::COMMA)
-          break;
-        else
-          match_token(token::COMMA);
-      }
-      match_token(token::RIGHT_PAREN);
-      return fc;
-    }
     pe->ident = ident;
     return pe;
   }
@@ -469,8 +467,59 @@ Ast_Primary_Expression *Jai_Parser::parse_primary_expression() {
   return nullptr;
 }
 
+Ast_Postfix_Expression *Jai_Parser::parse_postfix_expression() {
+  std::function<Ast_Postfix_Expression *()> parse_postfix_ext =
+      [this, &parse_postfix_ext]() -> Ast_Postfix_Expression * {
+    auto pf = AST_NEW(Ast_Postfix_Expression);
+    if (tok.Type == token::LEFT_BRACKET) {
+      match_token(token::LEFT_BRACKET);
+      pf->flags = AST_PF_INDEX;
+      pf->int_expr = parse_expression();
+      match_token(token::RIGHT_BRACKET);
+      pf->expr = parse_postfix_ext();
+    } else if (tok.Type == token::DOT) {
+      match_token(token::DOT);
+      pf->flags = AST_PF_FIELD_SELECTION;
+      pf->expr = parse_postfix_expression();
+    } else if (tok.Type == token::INC_OP) {
+      match_token(token::INC_OP);
+      pf->flags = AST_PF_INC;
+    } else if (tok.Type == token::DEC_OP) {
+      match_token(token::DEC_OP);
+      pf->flags = AST_PF_DEC;
+    } else {
+      AST_DELETE(pf);
+      return nullptr;
+    }
+
+    return pf;
+  };
+
+  if (tok.Type == token::IDENTIFIER &&
+      lex->PeekToken().Type == token::LEFT_PAREN) {
+    auto fc = AST_NEW(Ast_Function_Call);
+    fc->my_ident = parse_ident();
+    match_token(token::LEFT_PAREN);
+    while (tok.Type != token::RIGHT_PAREN) {
+      fc->params.push(parse_expression());
+      if (tok.Type != token::COMMA)
+        break;
+      else
+        match_token(token::COMMA);
+    }
+    match_token(token::RIGHT_PAREN);
+    fc->expr = parse_postfix_ext();
+    return fc;
+  } else {
+    auto prime = parse_primary_expression();
+    if (prime)
+      prime->expr = parse_postfix_ext();
+    return prime;
+  }
+}
+
 Ast_Expression *Jai_Parser::parse_expression() {
-  return parse_primary_expression();
+  return parse_postfix_expression();
 }
 
 Ast_Statement *Jai_Parser::parse_statement() {
@@ -558,6 +607,8 @@ Ast_Translation_Unit *Jai_Parser::parse_translation_unit(lexer_state *L) {
 }
 
 struct C_Converter {
+  static void emit_postfix_expression(Ast_Postfix_Expression *expr,
+                                      std::ostream &os);
   static void emit_expression(Ast_Expression *expr, std::ostream &os);
   static void emit_statement(Ast_Statement *stmt, std::ostream &os);
   static void emit_type_info(Ast_Type_Info *info, std::ostream &os);
@@ -565,8 +616,20 @@ struct C_Converter {
   static void emit_translation_unit(Ast_Translation_Unit *tu, std::ostream &os);
 };
 
-void C_Converter::emit_expression(Ast_Expression *expr, std::ostream &os) {
-  if (expr->type == AST_PRIMARY_EXPRESSION) {
+void C_Converter::emit_postfix_expression(Ast_Postfix_Expression *expr,
+                                          std::ostream &os) {
+  if (expr->type == AST_FUNCTION_CALL) {
+    auto fc = static_cast<Ast_Function_Call *>(expr);
+    os << fc->my_ident->my_name << "(";
+    for (int i = 0; i < fc->params.count; ++i) {
+      auto param = fc->params.array[i];
+      emit_expression(param, os);
+      if (i < fc->params.count - 1) {
+        os << ", ";
+      }
+    }
+    os << ")";
+  } else if (expr->type == AST_PRIMARY_EXPRESSION) {
     auto pe = static_cast<Ast_Primary_Expression *>(expr);
     switch (pe->expr_type) {
     case AST_PT_CONST_INT:
@@ -605,22 +668,33 @@ void C_Converter::emit_expression(Ast_Expression *expr, std::ostream &os) {
       break;
     }
   }
+
+  if (expr->flags == AST_PF_DEC) {
+    os << "--";
+  } else if (expr->flags == AST_PF_INC) {
+    os << "++";
+  } else if (expr->flags == AST_PF_INDEX) {
+    os << "[";
+    emit_expression(expr->int_expr, os);
+    os << "]";
+    emit_expression(expr->expr, os);
+  } else if (expr->flags == AST_PF_FIELD_SELECTION) {
+    os << ".";
+    emit_expression(expr->expr, os);
+  } else {
+    emit_expression(expr->expr, os);
+  }
+}
+
+void C_Converter::emit_expression(Ast_Expression *expr, std::ostream &os) {
+  if (!expr)
+    return;
+  emit_postfix_expression(static_cast<Ast_Postfix_Expression *>(expr), os);
 }
 
 void C_Converter::emit_statement(Ast_Statement *stmt, std::ostream &os) {
-  if (stmt->expr->type == AST_FUNCTION_CALL) {
-    auto fc = static_cast<Ast_Function_Call *>(stmt->expr);
-    os << fc->my_ident->my_name << "(";
-    for (int i = 0; i < fc->params.count; ++i) {
-      auto param = fc->params.array[i];
-      emit_expression(param, os);
-      if (i < fc->params.count - 1) {
-        os << ", ";
-      }
-    }
-    os << ")"
-       << ";" << std::endl;
-  }
+  emit_expression(stmt->expr, os);
+  os << ";" << std::endl;
 }
 
 void C_Converter::emit_type_info(Ast_Type_Info *info, std::ostream &os) {

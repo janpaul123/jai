@@ -49,8 +49,8 @@ token LexerGetToken(lexer_state *State) {
   token ReturnToken;
 
   auto IsWhiteSpace = [](char C) {
-    return (C == ' ') || (C == '\t') || (C == '\r') ||
-           (C == '\f');
+    return (C == ' ') || (C == '\t') || (C == '\r') || (C == '\f') ||
+           (C == '\n');
   };
 
   char *Current = State->CurrentPtr;
@@ -60,9 +60,11 @@ _CheckWhiteSpace:
   while (IsWhiteSpace(Current[0]) && (Current < State->EndPtr)) {
     ++State->OffsetCurrent;
     if (Current[0] == '\n') {
+      ReturnToken.Type = token::NEWLINE;
+      ReturnToken.Line = State->LineCurrent;
+      ReturnToken.Offset = State->OffsetCurrent;
       ++State->LineCurrent;
       State->OffsetCurrent = 0;
-      ReturnToken.Type = token::NEWLINE;
       ++Current;
       goto _Exit;
     }
@@ -125,11 +127,12 @@ _CheckWhiteSpace:
     goto _Exit;
   }
 
-  static auto IsNumberOrDot = [](char C) {
-    return ((C >= '0') && (C <= '9')) || (C == '.');
-  };
+  static auto IsNumber = [](char C) { return ((C >= '0') && (C <= '9')); };
 
-  if (IsNumberOrDot(Current[0])) {
+  static auto IsNumberOrDot =
+      [](char C) { return IsNumber(C) || (C == '.'); };
+
+  if (IsNumber(Current[0])) {
     bool IsFloat = false;
     char *End = Current;
     while (IsNumberOrDot(*End) && (End < State->EndPtr)) {
@@ -248,6 +251,21 @@ _CheckWhiteSpace:
     if (Current < State->EndPtr) {
       if (Current[1] == '>') {
         ReturnToken.Type = token::ARROW;
+        ++State->OffsetCurrent;
+        ++Current;
+      } else if (Current[1] == '-') {
+        ReturnToken.Type = token::DEC_OP;
+        ++State->OffsetCurrent;
+        ++Current;
+      }
+    }
+    goto _BuildToken;
+  }
+
+  case '+': {
+    if (Current < State->EndPtr) {
+      if (Current[1] == '+') {
+        ReturnToken.Type = token::INC_OP;
         ++State->OffsetCurrent;
         ++Current;
       }
