@@ -102,6 +102,7 @@ struct token {
   int Offset;
 
   friend std::string TokenToString(const token &T) {
+    if (T.Type == END) return "end-of-file";
     if (T.Type < END)
       return std::string(1, (char)T.Type);
     if (T.Type == FLOATCONSTANT)
@@ -165,8 +166,9 @@ struct token {
     return "";
   }
 
-  friend std::string TokenToString(const int &Type) {
+  friend std::string TokenToString(int Type) {
     symtable S;
+    if (Type == END) return "end-of-file";
     if (Type < END)
       return std::string(1, (char)Type);
     if (Type == IDENTIFIER)
@@ -236,7 +238,7 @@ struct token {
   }
 };
 
-std::string TokenToString(const int &Type);
+std::string TokenToString(int Type);
 
 struct lexer_state {
   char *SourcePtr;
