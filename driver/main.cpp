@@ -82,6 +82,7 @@ enum Ast_Type {
   AST_IDENTIFIER,
   AST_SELECTION_STATEMENT,
   AST_ITERATION_STATEMENT,
+  AST_EXPRESSION_STATEMENT,
   AST_FUNCTION_CALL,
   AST_PRIMARY_EXPRESSION,
 
@@ -134,13 +135,16 @@ struct Ast_Ident : public Ast {
 
 const int AST_STATEMENT_DEFER = (1 << 0);
 
+struct Ast_Expression;
+
 struct Ast_Statement : public Ast {
   Ast_Statement() { type = AST_STATEMENT; }
   Array<Ast_Statement *> compound_stmts;
+  Ast_Expression *expr;
   int flags = 0;
 };
 
-struct Ast_Expression : public Ast_Statement {
+struct Ast_Expression : public Ast {
   Ast_Expression() { type = AST_EXPRESSION; }
   Ast_Type_Info *inferred_type;
 };
@@ -163,7 +167,7 @@ struct Ast_Primary_Expression : public Ast_Expression {
   Ast_Expression *expr;
 };
 
-struct Ast_Function_Call : public Ast_Expression {
+struct Ast_Function_Call : public Ast_Primary_Expression {
   Ast_Function_Call() { type = AST_FUNCTION_CALL; }
   Ast_Ident *my_ident;
   Array<Ast_Expression *> params;
@@ -172,21 +176,22 @@ struct Ast_Function_Call : public Ast_Expression {
 struct Ast_Selection_Statement : public Ast_Statement {
   Ast_Selection_Statement() { type = AST_SELECTION_STATEMENT; }
   Ast_Statement *else_stmt;
-  Ast_Expression *expr;
 };
 
 struct Ast_Declaration : public Ast_Statement {
   Ast_Declaration() { type = AST_DECLARATION; }
   Ast_Type_Info *my_type;
   Ast_Ident *my_ident;
-  Ast_Expression *expr;
 };
 
 struct Ast_Iteration_Statement : public Ast_Statement {
   Ast_Iteration_Statement() { type = AST_ITERATION_STATEMENT; }
   Ast_Declaration *decl;
-  Ast_Expression *expr;
   Ast_Expression *cond;
+};
+
+struct Ast_Expression_Statement : public Ast_Statement {
+  Ast_Expression_Statement() { type = AST_EXPRESSION_STATEMENT; }
 };
 
 struct Ast_Lambda : public Ast_Declaration {
@@ -288,9 +293,9 @@ void *Jai_Interpreter::load_library(const char *libname) {
 
 void Jai_Interpreter::translate_function(Ast_Lambda *lamda) {
   for (int i = 0; i < lamda->statements.count; ++i) {
-    auto stmt = lamda->statements.array[i];
-    if (stmt->type == AST_FUNCTION_CALL) {
-      auto fc = static_cast<Ast_Function_Call *>(stmt);
+    auto expr = lamda->statements.array[i]->expr;
+    if (expr->type == AST_FUNCTION_CALL) {
+      auto fc = static_cast<Ast_Function_Call *>(expr);
       Jai_Command cmd;
       cmd.type = COM_CALL_NATIVE;
       cmd.ptr = find_symbol(fc->my_ident->my_name);
@@ -441,8 +446,23 @@ Ast_Primary_Expression *Jai_Parser::parse_primary_expression() {
   }
   case token::IDENTIFIER:
     pe->expr_type = AST_PT_IDENTIFIER;
-    pe->ident = parse_ident();
-    match_token(tok.Type);
+    auto ident = parse_ident();
+    if (tok.Type == token::LEFT_PAREN) {
+      AST_DELETE(pe);
+      auto fc = AST_NEW(Ast_Function_Call);
+      fc->my_ident = ident;
+      match_token(token::LEFT_PAREN);
+      while (tok.Type != token::RIGHT_PAREN) {
+        fc->params.push(parse_expression());
+        if (tok.Type != token::COMMA)
+          break;
+        else
+          match_token(token::COMMA);
+      }
+      match_token(token::RIGHT_PAREN);
+      return fc;
+    }
+    pe->ident = ident;
     return pe;
   }
 
@@ -450,22 +470,6 @@ Ast_Primary_Expression *Jai_Parser::parse_primary_expression() {
 }
 
 Ast_Expression *Jai_Parser::parse_expression() {
-  if (tok.Type == token::IDENTIFIER &&
-      lex->PeekToken().Type == token::LEFT_PAREN) {
-    Ast_Function_Call *fc = AST_NEW(Ast_Function_Call);
-    fc->my_ident = parse_ident();
-    match_token(token::LEFT_PAREN);
-    while (tok.Type != token::RIGHT_PAREN) {
-      fc->params.push(parse_expression());
-      if (tok.Type != token::COMMA)
-        break;
-      else
-        match_token(token::COMMA);
-    }
-    match_token(token::RIGHT_PAREN);
-    return fc;
-  }
-
   return parse_primary_expression();
 }
 
@@ -488,9 +492,10 @@ Ast_Statement *Jai_Parser::parse_statement() {
   } else {
   }
 
-  auto expr = parse_expression();
+  auto stmt = AST_NEW(Ast_Expression_Statement);
+  stmt->expr = parse_expression();
   match_token(token::SEMICOLON);
-  return expr;
+  return stmt;
 }
 
 Ast_Ident *Jai_Parser::parse_ident() {
@@ -603,8 +608,8 @@ void C_Converter::emit_expression(Ast_Expression *expr, std::ostream &os) {
 }
 
 void C_Converter::emit_statement(Ast_Statement *stmt, std::ostream &os) {
-  if (stmt->type == AST_FUNCTION_CALL) {
-    auto fc = static_cast<Ast_Function_Call *>(stmt);
+  if (stmt->expr->type == AST_FUNCTION_CALL) {
+    auto fc = static_cast<Ast_Function_Call *>(stmt->expr);
     os << fc->my_ident->my_name << "(";
     for (int i = 0; i < fc->params.count; ++i) {
       auto param = fc->params.array[i];
