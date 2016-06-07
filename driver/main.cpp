@@ -146,6 +146,8 @@ struct Ast_Ident : public Ast {
 };
 
 const int AST_STATEMENT_DEFER = (1 << 0);
+const int AST_STATEMENT_RETURN = (1 << 1);
+const int AST_STATEMENT_COMPOUND = (1 << 2);
 
 struct Ast_Expression;
 
@@ -180,6 +182,7 @@ enum Primary_Type {
   AST_PT_STRING_LITERAL,
   AST_PT_CONST_BOOL,
   AST_PT_IDENTIFIER,
+  AST_PT_PAREN,
 };
 
 struct Ast_Primary_Expression : public Ast_Postfix_Expression {
@@ -189,6 +192,7 @@ struct Ast_Primary_Expression : public Ast_Postfix_Expression {
   double float_const;
   String string_literal;
   Ast_Ident *ident;
+  Ast_Expression *nested_expr;
 };
 
 struct Ast_Function_Call : public Ast_Postfix_Expression {
@@ -211,6 +215,7 @@ struct Ast_Iteration_Statement : public Ast_Statement {
   Ast_Iteration_Statement() { type = AST_ITERATION_STATEMENT; }
   Ast_Declaration *decl;
   Ast_Expression *cond;
+  Ast_Statement *stmt;
 };
 
 struct Ast_Expression_Statement : public Ast_Statement {
@@ -253,7 +258,7 @@ Ast_Lambda *Ast_Scope::lookup_function(const char *name) {
 
 void Ast_Scope::push_stmt(Ast_Statement *stmt) {
   stmt->scope.parent_scope = this;
-  if (stmt->flags == AST_STATEMENT_DEFER) {
+  if (stmt->flags & AST_STATEMENT_DEFER) {
     defered_stmts.push(stmt);
   } else {
     stmts.push(stmt);
@@ -288,7 +293,7 @@ struct Jai_Interpreter {
   void *find_symbol(const char *sym_name);
   void *find_symbol_in_lib(void *lib_handle, const char *sym_name);
   void *load_library(const char *libname);
-  Array <Jai_Command> translate_function(Ast_Lambda *lambda);
+  Array<Jai_Command> translate_function(Ast_Lambda *lambda);
   void run_function(Ast_Lambda *lambda);
 };
 
@@ -323,8 +328,9 @@ void *Jai_Interpreter::load_library(const char *libname) {
   return lib;
 }
 
-Array <Jai_Interpreter::Jai_Command> Jai_Interpreter::translate_function(Ast_Lambda *lambda) {
-  Array <Jai_Command> cmd_qeue;
+Array<Jai_Interpreter::Jai_Command>
+Jai_Interpreter::translate_function(Ast_Lambda *lambda) {
+  Array<Jai_Command> cmd_qeue;
   for (int i = 0; i < lambda->scope.stmts.count; ++i) {
     auto expr = lambda->scope.stmts.array[i]->expr;
     if (expr->type == AST_FUNCTION_CALL) {
@@ -347,7 +353,7 @@ Array <Jai_Interpreter::Jai_Command> Jai_Interpreter::translate_function(Ast_Lam
 }
 
 void Jai_Interpreter::run_function(Ast_Lambda *lambda) {
-  Array <Jai_Command> cmd_qeue = translate_function(lambda);
+  Array<Jai_Command> cmd_qeue = translate_function(lambda);
   for (int i = 0; i < cmd_qeue.count; ++i) {
     auto cmd = cmd_qeue.array[i];
     switch (cmd.type) {
@@ -488,10 +494,17 @@ Ast_Primary_Expression *Jai_Parser::parse_primary_expression() {
     match_token(tok.Type);
     return pe;
   }
-  case token::IDENTIFIER:
+  case token::IDENTIFIER: {
     pe->expr_type = AST_PT_IDENTIFIER;
     auto ident = parse_ident();
     pe->ident = ident;
+    return pe;
+  }
+  case token::LEFT_PAREN:
+    match_token(token::LEFT_PAREN);
+    pe->expr_type = AST_PT_PAREN;
+    pe->nested_expr = parse_expression();
+    match_token(token::RIGHT_PAREN);
     return pe;
   }
 
@@ -554,14 +567,31 @@ Ast_Expression *Jai_Parser::parse_expression() {
 }
 
 Ast_Statement *Jai_Parser::parse_statement() {
-  if (tok.Type == token::IF) {
+  if (tok.Type == token::LEFT_BRACE) {
+    match_token(token::LEFT_BRACE);
+    auto stmt = AST_NEW(Ast_Statement);
+    stmt->flags = AST_STATEMENT_COMPOUND;
+    while (tok.Type != token::RIGHT_BRACE) {
+      stmt->scope.push_stmt(parse_statement());
+    }
+    match_token(token::RIGHT_BRACE);
+    return stmt;
+  } else if (tok.Type == token::IF) {
 
   } else if (tok.Type == token::WHILE) {
-
+    match_token(token::WHILE);
+    auto iter = AST_NEW(Ast_Iteration_Statement);
+    iter->cond = parse_expression();
+    iter->stmt = parse_statement();
+    iter->stmt->scope.parent_scope = &iter->scope;
+    return iter;
   } else if (tok.Type == token::DO) {
 
   } else if (tok.Type == token::RETURN) {
-
+    match_token(token::RETURN);
+    auto stmt = parse_statement();
+    stmt->flags |= AST_STATEMENT_RETURN;
+    return stmt;
   } else if (tok.Type == token::DEFER) {
     match_token(token::DEFER);
     auto stmt = parse_statement();
@@ -703,6 +733,11 @@ void C_Converter::emit_postfix_expression(Ast_Postfix_Expression *expr,
     case AST_PT_IDENTIFIER:
       os << pe->ident->my_name;
       break;
+    case AST_PT_PAREN:
+      os << "(";
+      emit_expression(pe->nested_expr, os);
+      os << ")";
+      break;
     }
   }
 
@@ -730,6 +765,26 @@ void C_Converter::emit_expression(Ast_Expression *expr, std::ostream &os) {
 }
 
 void C_Converter::emit_statement(Ast_Statement *stmt, std::ostream &os) {
+  if (stmt->type == AST_ITERATION_STATEMENT) {
+    auto iter = static_cast<Ast_Iteration_Statement *>(stmt);
+    os << "while ";
+    emit_expression(iter->cond, os);
+    emit_statement(iter->stmt, os);
+    return;
+  }
+  if (stmt->flags & AST_STATEMENT_RETURN) {
+    os << "return ";
+  } else if (stmt->flags & AST_STATEMENT_COMPOUND) {
+    os << "{" << std::endl;
+    for (int i = 0; i < stmt->scope.stmts.count; ++i) {
+      emit_statement(stmt->scope.stmts.array[i], os);
+    }
+    for (int i = stmt->scope.defered_stmts.count - 1; i >= 0; --i) {
+      emit_statement(stmt->scope.defered_stmts.array[i], os);
+    }
+    os << "}" << std::endl;
+    return;
+  }
   emit_expression(stmt->expr, os);
   os << ";" << std::endl;
 }
@@ -780,11 +835,21 @@ void C_Converter::emit_translation_unit(Ast_Translation_Unit *tu,
       emit_ident(lambda->my_ident, os);
       os << "() "; // TODO params gen
       os << "{" << std::endl;
+      bool returned = false;
       for (int i = 0; i < lambda->scope.stmts.count; ++i) {
-        emit_statement(lambda->scope.stmts.array[i], os);
+        auto stmt = lambda->scope.stmts.array[i];
+        if (stmt->flags & AST_STATEMENT_RETURN) {
+          for (int i = lambda->scope.defered_stmts.count - 1; i >= 0; --i) {
+            emit_statement(lambda->scope.defered_stmts.array[i], os);
+          }
+          returned = true;
+        }
+        emit_statement(stmt, os);
       }
-      for (int i = lambda->scope.defered_stmts.count - 1; i >= 0; --i) {
-        emit_statement(lambda->scope.defered_stmts.array[i], os);
+      if (!returned) {
+        for (int i = lambda->scope.defered_stmts.count - 1; i >= 0; --i) {
+          emit_statement(lambda->scope.defered_stmts.array[i], os);
+        }
       }
       os << "}" << std::endl;
     }
@@ -826,7 +891,6 @@ int main(int argc, char **argv) {
   }
   LexerInit(&Lexer, Source, Source + Size);
   Ast_Translation_Unit *trans_unit = Jai_Parser::parse_translation_unit(&Lexer);
-  C_Converter::emit_translation_unit(trans_unit, std::cout);
   Jai_Interpreter interp;
   for (int i = 0; i < trans_unit->hashes.count; ++i) {
     auto hash = trans_unit->hashes.array[i];
@@ -836,6 +900,13 @@ int main(int argc, char **argv) {
           trans_unit->scope.lookup_function(run->fc->my_ident->my_name);
       interp.run_function(lambda);
     }
+  }
+  if (OutputFilePath) {
+    std::ofstream fs;
+    fs.open(OutputFilePath);
+    C_Converter::emit_translation_unit(trans_unit, fs);
+  } else {
+    C_Converter::emit_translation_unit(trans_unit, std::cout);
   }
   return 0;
 }

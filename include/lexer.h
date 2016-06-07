@@ -102,9 +102,12 @@ struct token {
   int Offset;
 
   friend std::string TokenToString(const token &T) {
-    if (T.Type == END) return "end-of-file";
+    if (T.Type == END)
+      return "end-of-file";
     if (T.Type < END)
       return std::string(1, (char)T.Type);
+    if (T.Type == IDENTIFIER)
+      return T.Id;
     if (T.Type == FLOATCONSTANT)
       return std::to_string(T.FloatValue);
     if (T.Type == INTCONSTANT)
@@ -168,7 +171,8 @@ struct token {
 
   friend std::string TokenToString(int Type) {
     symtable S;
-    if (Type == END) return "end-of-file";
+    if (Type == END)
+      return "end-of-file";
     if (Type < END)
       return std::string(1, (char)Type);
     if (Type == IDENTIFIER)

@@ -36,6 +36,7 @@ void LexerInit(lexer_state *State, char *Source, char *End) {
   State->Table->Insert("new", token::NEW);
   State->Table->Insert("delete", token::DELETE);
   State->Table->Insert("defer", token::DEFER);
+  State->Table->Insert("while", token::WHILE);
 }
 
 token LexerPeekToken(lexer_state *State) {
