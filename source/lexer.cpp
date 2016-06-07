@@ -15,12 +15,27 @@ token lexer_state::GetToken() { return LexerGetToken(this); }
 
 token lexer_state::PeekToken() { return LexerPeekToken(this); }
 
-void LexerInit(lexer_state *State, char *Source, char *End, symtable *T) {
+void LexerInit(lexer_state *State, char *Source, char *End) {
   State->SourcePtr = State->CurrentPtr = Source;
   State->EndPtr = End - 1;
   State->LineCurrent = 1;
   State->OffsetCurrent = 0;
-  State->Table = T;
+  State->Table = new symtable();
+  State->Table->Insert("const", token::CONST);
+  State->Table->Insert("bool", token::BOOL);
+  State->Table->Insert("float", token::FLOAT);
+  State->Table->Insert("char", token::CHAR);
+  State->Table->Insert("int", token::INT);
+  State->Table->Insert("break", token::BREAK);
+  State->Table->Insert("continue", token::CONTINUE);
+  State->Table->Insert("do", token::DO);
+  State->Table->Insert("else", token::ELSE);
+  State->Table->Insert("for", token::FOR);
+  State->Table->Insert("if", token::IF);
+  State->Table->Insert("return", token::RETURN);
+  State->Table->Insert("new", token::NEW);
+  State->Table->Insert("delete", token::DELETE);
+  State->Table->Insert("defer", token::DEFER);
 }
 
 token LexerPeekToken(lexer_state *State) {
@@ -110,7 +125,7 @@ _CheckWhiteSpace:
     }
     std::string TheID = std::string(Current, End - Current);
     symtable_entry *Entry = State->Table->Lookup(TheID);
-    if (Entry->SymbolType == 0)
+    if (!Entry)
       Entry = State->Table->Insert(TheID, token::IDENTIFIER);
     ReturnToken.Id = Entry->Name;
     ReturnToken.Type = Entry->SymbolType;

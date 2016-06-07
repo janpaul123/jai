@@ -19,8 +19,6 @@ char *SlurpFile(const char *FilePath, long *FileSize) {
   return Buffer;
 }
 
-static symtable SymbolTable;
-
 static int ErrorCount = 0;
 static void ErrorCallback(const std::string &ErrMsg,
                           const std::string &OffendingLine, int LineNumber,
@@ -97,6 +95,19 @@ struct Ast {
   char *filename;
 };
 
+struct Ast_Statement;
+struct Ast_Lambda;
+
+struct Ast_Scope : public Ast {
+  symtable symbols;
+  Array<Ast_Statement *> stmts;
+  Array<Ast_Statement *> defered_stmts;
+  Ast_Scope *parent_scope;
+
+  Ast_Lambda *lookup_function(const char *name);
+  void push_stmt(Ast_Statement *stmt);
+};
+
 Ast *ast_default_construct(Ast *AST, token tok, char *filename) {
   AST->line_number = tok.Line;
   AST->line_offset = tok.Offset;
@@ -140,7 +151,7 @@ struct Ast_Expression;
 
 struct Ast_Statement : public Ast {
   Ast_Statement() { type = AST_STATEMENT; }
-  Array<Ast_Statement *> compound_stmts;
+  Ast_Scope scope;
   Ast_Expression *expr;
   int flags = 0;
 };
@@ -209,8 +220,6 @@ struct Ast_Expression_Statement : public Ast_Statement {
 struct Ast_Lambda : public Ast_Declaration {
   Ast_Lambda() { type = AST_LAMDA; }
   Array<Ast_Declaration *> params;
-  Array<Ast_Statement *> statements;
-  Array<Ast_Statement *> deferd_statements;
 };
 
 struct Ast_Hash_Directive : public Ast {
@@ -224,18 +233,32 @@ struct Ast_Hash_Run : public Ast_Hash_Directive {
 
 struct Ast_Translation_Unit : public Ast {
   Ast_Translation_Unit() { type = AST_TRANSLATION_UNIT; }
-  Array<Ast_Declaration *> declarations;
   Array<Ast_Hash_Directive *> hashes;
-
-  Ast_Lambda *lookup_function(const char *name) {
-    for (int i = 0; i < declarations.count; ++i) {
-      auto decl = declarations.array[i];
-      if (decl->type == AST_LAMDA && strcmp(decl->my_ident->my_name, name) == 0)
-        return static_cast<Ast_Lambda *>(decl);
-    }
-    return nullptr;
-  }
+  Ast_Scope scope;
 };
+
+Ast_Lambda *Ast_Scope::lookup_function(const char *name) {
+  auto e = symbols.Lookup(name);
+  if (e) {
+    if (e->ast && e->ast->type == AST_LAMDA) {
+      auto lambda = static_cast<Ast_Lambda *>(e->ast);
+      if (strcmp(lambda->my_ident->my_name, name) == 0)
+        return lambda;
+    }
+  }
+  if (parent_scope)
+    return parent_scope->lookup_function(name);
+  return nullptr;
+}
+
+void Ast_Scope::push_stmt(Ast_Statement *stmt) {
+  stmt->scope.parent_scope = this;
+  if (stmt->flags == AST_STATEMENT_DEFER) {
+    defered_stmts.push(stmt);
+  } else {
+    stmts.push(stmt);
+  }
+}
 
 #include <dlfcn.h>
 
@@ -258,8 +281,6 @@ struct Jai_Interpreter {
       float float32;
     };
   };
-
-  Array<Jai_Command> cmd_qeue;
   Array<void *> linked_libs;
 
   Jai_Interpreter() { load_library(nullptr); }
@@ -267,8 +288,8 @@ struct Jai_Interpreter {
   void *find_symbol(const char *sym_name);
   void *find_symbol_in_lib(void *lib_handle, const char *sym_name);
   void *load_library(const char *libname);
-  void translate_function(Ast_Lambda *lamda);
-  void run_function(Ast_Lambda *lamda);
+  Array <Jai_Command> translate_function(Ast_Lambda *lambda);
+  void run_function(Ast_Lambda *lambda);
 };
 
 extern "C" {
@@ -281,7 +302,6 @@ void *Jai_Interpreter::find_symbol(const char *sym_name) {
       continue;
     void *ptr = find_symbol_in_lib(linked_libs.array[i], sym_name);
     if (ptr) {
-      printf("found symbol %s\n", sym_name);
       return ptr;
     }
   }
@@ -303,27 +323,42 @@ void *Jai_Interpreter::load_library(const char *libname) {
   return lib;
 }
 
-void Jai_Interpreter::translate_function(Ast_Lambda *lamda) {
-  for (int i = 0; i < lamda->statements.count; ++i) {
-    auto expr = lamda->statements.array[i]->expr;
+Array <Jai_Interpreter::Jai_Command> Jai_Interpreter::translate_function(Ast_Lambda *lambda) {
+  Array <Jai_Command> cmd_qeue;
+  for (int i = 0; i < lambda->scope.stmts.count; ++i) {
+    auto expr = lambda->scope.stmts.array[i]->expr;
     if (expr->type == AST_FUNCTION_CALL) {
       auto fc = static_cast<Ast_Function_Call *>(expr);
-      Jai_Command cmd;
-      cmd.type = COM_CALL_NATIVE;
-      cmd.ptr = find_symbol(fc->my_ident->my_name);
-      cmd_qeue.push(cmd);
+      auto func = lambda->scope.lookup_function(fc->my_ident->my_name);
+      if (func) {
+        Jai_Command cmd;
+        cmd.type = COM_CALL_JAI;
+        cmd.ptr = func;
+        cmd_qeue.push(cmd);
+      } else {
+        Jai_Command cmd;
+        cmd.type = COM_CALL_NATIVE;
+        cmd.ptr = find_symbol(fc->my_ident->my_name);
+        cmd_qeue.push(cmd);
+      }
     }
   }
+  return cmd_qeue;
 }
 
-void Jai_Interpreter::run_function(Ast_Lambda *lamda) {
-  translate_function(lamda);
+void Jai_Interpreter::run_function(Ast_Lambda *lambda) {
+  Array <Jai_Command> cmd_qeue = translate_function(lambda);
   for (int i = 0; i < cmd_qeue.count; ++i) {
     auto cmd = cmd_qeue.array[i];
     switch (cmd.type) {
     case COM_CALL_NATIVE: {
       void (*func_ptr)() = (void (*)())(cmd.ptr);
       func_ptr();
+      break;
+    }
+    case COM_CALL_JAI: {
+      auto func = static_cast<Ast_Lambda *>(cmd.ptr);
+      run_function(func);
       break;
     }
     }
@@ -400,10 +435,10 @@ Ast_Type_Info *Jai_Parser::parse_type() {
 }
 
 Ast_Lambda *Jai_Parser::parse_lambda_definition() {
-  Ast_Lambda *lamda = AST_NEW(Ast_Lambda);
+  Ast_Lambda *lambda = AST_NEW(Ast_Lambda);
   match_token(token::LEFT_PAREN);
   while (tok.Type != token::RIGHT_PAREN) {
-    lamda->params.push(parse_external_declaration());
+    lambda->params.push(parse_external_declaration());
     if (tok.Type != token::COMMA)
       break;
     else
@@ -411,22 +446,18 @@ Ast_Lambda *Jai_Parser::parse_lambda_definition() {
   }
   match_token(token::RIGHT_PAREN);
   match_token(token::ARROW);
-  lamda->my_type = parse_type();
+  lambda->my_type = parse_type();
   if (tok.Type == token::LEFT_BRACE) {
     match_token(token::LEFT_BRACE);
     while (tok.Type != token::RIGHT_BRACE) {
       auto stmt = parse_statement();
-      if (stmt->flags & AST_STATEMENT_DEFER) {
-        lamda->deferd_statements.push(stmt);
-      } else {
-        lamda->statements.push(stmt);
-      }
+      lambda->scope.push_stmt(stmt);
     }
     match_token(token::RIGHT_BRACE);
   } else {
     match_token(token::SEMICOLON);
   }
-  return lamda;
+  return lambda;
 }
 
 Ast_Primary_Expression *Jai_Parser::parse_primary_expression() {
@@ -572,10 +603,10 @@ Ast_Declaration *Jai_Parser::parse_external_declaration() {
       if (tok.Type == token::ARROW) {
         tok = saved_tok;
         *lex = saved_lex;
-        Ast_Lambda *lamda = parse_lambda_definition();
-        lamda->my_ident = decl->my_ident;
+        Ast_Lambda *lambda = parse_lambda_definition();
+        lambda->my_ident = decl->my_ident;
         AST_DELETE(decl);
-        return lamda;
+        return lambda;
       }
       tok = saved_tok;
       *lex = saved_lex;
@@ -601,7 +632,13 @@ Ast_Translation_Unit *Jai_Parser::parse_translation_unit(lexer_state *L) {
   parser.match_token(parser.tok.Type);
   parser.root_node = trans_unit;
   while (parser.tok.Type != token::END) {
-    trans_unit->declarations.push(parser.parse_external_declaration());
+    auto decl = parser.parse_external_declaration();
+    trans_unit->scope.push_stmt(decl);
+    auto symbol = trans_unit->scope.symbols.Lookup(decl->my_ident->my_name);
+    if (!symbol)
+      symbol = trans_unit->scope.symbols.Insert(
+          std::string(decl->my_ident->my_name), token::IDENTIFIER);
+    symbol->ast = decl;
   }
   return trans_unit;
 }
@@ -735,19 +772,19 @@ void C_Converter::emit_translation_unit(Ast_Translation_Unit *tu,
   os << "typedef float float32;" << std::endl;
   os << "typedef double float64;" << std::endl;
   os << "typedef char bool;" << std::endl;
-  for (int i = 0; i < tu->declarations.count; ++i) {
-    auto decl = tu->declarations.array[i];
+  for (int i = 0; i < tu->scope.stmts.count; ++i) {
+    auto decl = static_cast<Ast_Declaration *>(tu->scope.stmts.array[i]);
     if (decl->type == AST_LAMDA) {
-      auto lamda = static_cast<Ast_Lambda *>(decl);
-      emit_type_info(lamda->my_type, os);
-      emit_ident(lamda->my_ident, os);
+      auto lambda = static_cast<Ast_Lambda *>(decl);
+      emit_type_info(lambda->my_type, os);
+      emit_ident(lambda->my_ident, os);
       os << "() "; // TODO params gen
       os << "{" << std::endl;
-      for (int i = 0; i < lamda->statements.count; ++i) {
-        emit_statement(lamda->statements.array[i], os);
+      for (int i = 0; i < lambda->scope.stmts.count; ++i) {
+        emit_statement(lambda->scope.stmts.array[i], os);
       }
-      for (int i = lamda->deferd_statements.count - 1; i >= 0; --i) {
-        emit_statement(lamda->deferd_statements.array[i], os);
+      for (int i = lambda->scope.defered_stmts.count - 1; i >= 0; --i) {
+        emit_statement(lambda->scope.defered_stmts.array[i], os);
       }
       os << "}" << std::endl;
     }
@@ -787,7 +824,7 @@ int main(int argc, char **argv) {
     printf("error: no such file or directory: \'%s\'\n", InputFilePath);
     return -1;
   }
-  LexerInit(&Lexer, Source, Source + Size, &SymbolTable);
+  LexerInit(&Lexer, Source, Source + Size);
   Ast_Translation_Unit *trans_unit = Jai_Parser::parse_translation_unit(&Lexer);
   C_Converter::emit_translation_unit(trans_unit, std::cout);
   Jai_Interpreter interp;
@@ -795,9 +832,9 @@ int main(int argc, char **argv) {
     auto hash = trans_unit->hashes.array[i];
     if (hash->type == AST_HASH_RUN) {
       auto run = static_cast<Ast_Hash_Run *>(hash);
-      auto lamda = trans_unit->lookup_function(run->fc->my_ident->my_name);
-      printf("running function \"%s\"\n", lamda->my_ident->my_name);
-      interp.run_function(lamda);
+      auto lambda =
+          trans_unit->scope.lookup_function(run->fc->my_ident->my_name);
+      interp.run_function(lambda);
     }
   }
   return 0;
