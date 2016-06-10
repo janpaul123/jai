@@ -84,6 +84,7 @@ enum Ast_Type {
   AST_FUNCTION_CALL,
   AST_PRIMARY_EXPRESSION,
   AST_POSTFIX_EXPRESSION,
+  AST_UNARY_EXPRESSION,
 
   AST_HASH_RUN,
 };
@@ -129,6 +130,8 @@ const int AST_TYPE_CHAR = 4;
 const int AST_TYPE_STRUCT = 5;
 const int AST_TYPE_LAMBDA = 6;
 const int AST_TYPE_TYPENAME = 7;
+const int AST_TYPE_VARIADIC = 8;
+const int AST_TYPE_POINTER = 9;
 
 struct Ast_Struct : public Ast {
   Ast_Struct() { type = AST_STRUCT; }
@@ -137,6 +140,7 @@ struct Ast_Struct : public Ast {
 struct Ast_Type_Info : public Ast {
   Ast_Type_Info() { type = AST_TYPE_INFO; }
   int atom_type;
+  Ast_Type_Info *expanded_info;
   Ast_Struct *struct_i_implement;
 };
 
@@ -148,6 +152,8 @@ struct Ast_Ident : public Ast {
 const int AST_STATEMENT_DEFER = (1 << 0);
 const int AST_STATEMENT_RETURN = (1 << 1);
 const int AST_STATEMENT_COMPOUND = (1 << 2);
+const int AST_STATEMENT_DEFINITION = (1 << 3);
+const int AST_DECLARATION_FOREIGN = (1 << 4);
 
 struct Ast_Expression;
 
@@ -174,6 +180,21 @@ struct Ast_Postfix_Expression : public Ast_Expression {
   Ast_Expression *expr;
   Ast_Expression *int_expr;
   Ast_Ident *my_ident;
+};
+
+const int AST_UNARY_INC = 1;
+const int AST_UNARY_DEC = 2;
+const int AST_UNARY_PLUS = 3;
+const int AST_UNARY_DASH = 4;
+const int AST_UNARY_BANG = 5;
+const int AST_UNARY_TILDE = 6;
+const int AST_UNARY_DEREF = 7; // '*'
+const int AST_UNARY_REF = 8;   // '&'
+
+struct Ast_Unary_Expression : public Ast_Expression {
+  Ast_Unary_Expression() { type = AST_UNARY_EXPRESSION; }
+  int flags = 0;
+  Ast_Expression *expr;
 };
 
 enum Primary_Type {
@@ -209,6 +230,7 @@ struct Ast_Declaration : public Ast_Statement {
   Ast_Declaration() { type = AST_DECLARATION; }
   Ast_Type_Info *my_type;
   Ast_Ident *my_ident;
+  char *symbol_name;
 };
 
 struct Ast_Iteration_Statement : public Ast_Statement {
@@ -378,8 +400,10 @@ struct Jai_Parser {
   Ast_Translation_Unit *root_node;
 
   void match_token(int type);
-  Ast_Primary_Expression *parse_primary_expression();
-  Ast_Postfix_Expression *parse_postfix_expression();
+  Ast_Declaration *parse_declaration_attributes(Ast_Declaration *decl);
+  Ast_Expression *parse_primary_expression();
+  Ast_Expression *parse_postfix_expression();
+  Ast_Expression *parse_unary_expression();
   Ast_Statement *parse_statement();
   Ast_Type_Info *parse_type();
   Ast_Lambda *parse_lambda_definition();
@@ -429,12 +453,22 @@ Ast_Type_Info *Jai_Parser::parse_type() {
   case token::VOID:
     info->atom_type = AST_TYPE_VOID;
     break;
+  case token::ELLIPSIS:
+    info->atom_type = AST_TYPE_VARIADIC;
+    break;
   case token::IDENTIFIER:
     // do type lookup
     break;
-
+  case token::CARET:
+    break;
   default:
     printf("unexpected token %s\n", TokenToString(tok).c_str());
+  }
+  if (tok.Type == token::CARET) {
+    match_token(token::CARET);
+    info->atom_type = AST_TYPE_POINTER;
+    info->expanded_info = parse_type();
+    return info;
   }
   match_token(tok.Type);
   return info;
@@ -442,6 +476,8 @@ Ast_Type_Info *Jai_Parser::parse_type() {
 
 Ast_Lambda *Jai_Parser::parse_lambda_definition() {
   Ast_Lambda *lambda = AST_NEW(Ast_Lambda);
+  lambda->my_ident = parse_ident();
+  match_token(token::TWO_COLONS);
   match_token(token::LEFT_PAREN);
   while (tok.Type != token::RIGHT_PAREN) {
     lambda->params.push(parse_external_declaration());
@@ -453,6 +489,7 @@ Ast_Lambda *Jai_Parser::parse_lambda_definition() {
   match_token(token::RIGHT_PAREN);
   match_token(token::ARROW);
   lambda->my_type = parse_type();
+  parse_declaration_attributes(lambda);
   if (tok.Type == token::LEFT_BRACE) {
     match_token(token::LEFT_BRACE);
     while (tok.Type != token::RIGHT_BRACE) {
@@ -460,13 +497,14 @@ Ast_Lambda *Jai_Parser::parse_lambda_definition() {
       lambda->scope.push_stmt(stmt);
     }
     match_token(token::RIGHT_BRACE);
+    lambda->flags |= AST_STATEMENT_DEFINITION;
   } else {
     match_token(token::SEMICOLON);
   }
   return lambda;
 }
 
-Ast_Primary_Expression *Jai_Parser::parse_primary_expression() {
+Ast_Expression *Jai_Parser::parse_primary_expression() {
   auto pe = AST_NEW(Ast_Primary_Expression);
   switch (tok.Type) {
   case token::INTCONSTANT:
@@ -511,7 +549,7 @@ Ast_Primary_Expression *Jai_Parser::parse_primary_expression() {
   return nullptr;
 }
 
-Ast_Postfix_Expression *Jai_Parser::parse_postfix_expression() {
+Ast_Expression *Jai_Parser::parse_postfix_expression() {
   std::function<Ast_Postfix_Expression *()> parse_postfix_ext =
       [this, &parse_postfix_ext]() -> Ast_Postfix_Expression * {
     auto pf = AST_NEW(Ast_Postfix_Expression);
@@ -555,15 +593,60 @@ Ast_Postfix_Expression *Jai_Parser::parse_postfix_expression() {
     fc->expr = parse_postfix_ext();
     return fc;
   } else {
-    auto prime = parse_primary_expression();
+    auto prime =
+        static_cast<Ast_Primary_Expression *>(parse_primary_expression());
     if (prime)
       prime->expr = parse_postfix_ext();
     return prime;
   }
 }
 
+Ast_Expression *Jai_Parser::parse_unary_expression() {
+  auto unary = AST_NEW(Ast_Unary_Expression);
+  switch (tok.Type) {
+  case token::PLUS:
+    match_token(tok.Type);
+    unary->flags = AST_UNARY_PLUS;
+    break;
+  case token::DASH:
+    match_token(tok.Type);
+    unary->flags = AST_UNARY_DASH;
+    break;
+  case token::BANG:
+    match_token(tok.Type);
+    unary->flags = AST_UNARY_BANG;
+    break;
+  case token::TILDE:
+    match_token(tok.Type);
+    unary->flags = AST_UNARY_TILDE;
+    break;
+  case token::STAR:
+    match_token(tok.Type);
+    unary->flags = AST_UNARY_DEREF;
+    break;
+  case token::AMPERSAND:
+    match_token(tok.Type);
+    unary->flags = AST_UNARY_REF;
+    break;
+  case token::INC_OP:
+    match_token(tok.Type);
+    unary->flags = AST_UNARY_INC;
+    break;
+  case token::DEC_OP:
+    match_token(tok.Type);
+    unary->flags = AST_UNARY_DEC;
+    break;
+  default:
+    AST_DELETE(unary);
+    return parse_postfix_expression();
+  }
+
+  unary->expr = parse_unary_expression();
+  return unary;
+}
+
 Ast_Expression *Jai_Parser::parse_expression() {
-  return parse_postfix_expression();
+  return parse_unary_expression();
 }
 
 Ast_Statement *Jai_Parser::parse_statement() {
@@ -617,40 +700,45 @@ Ast_Ident *Jai_Parser::parse_ident() {
   return ident;
 }
 
-Ast_Declaration *Jai_Parser::parse_external_declaration() {
-  Ast_Declaration *decl = AST_NEW(Ast_Declaration);
-  decl->my_ident = parse_ident();
-  if (tok.Type == token::COLON_ASSIGN) {
-    match_token(token::COLON_ASSIGN);
-    if (tok.Type == token::LEFT_PAREN) {
-      token saved_tok = tok;
-      lexer_state saved_lex = *lex;
-      match_token(token::LEFT_PAREN);
-      while (tok.Type != token::RIGHT_PAREN) {
-        match_token(tok.Type);
+Ast_Declaration *
+Jai_Parser::parse_declaration_attributes(Ast_Declaration *decl) {
+  decl->symbol_name = decl->my_ident->my_name;
+  if (tok.Type == token::HASH) {
+    match_token(token::HASH);
+    if (tok.Type == token::FOREIGN) {
+      match_token(token::FOREIGN);
+      decl->flags |= AST_DECLARATION_FOREIGN;
+      if (tok.Type == token::DQSTRING) {
+        char *str = (char *)calloc(1, tok.Id.length() + 1);
+        memcpy(str, tok.Id.c_str(), tok.Id.length());
+        decl->symbol_name = str;
+        match_token(token::DQSTRING);
       }
-      match_token(token::RIGHT_PAREN);
-      if (tok.Type == token::ARROW) {
-        tok = saved_tok;
-        *lex = saved_lex;
-        Ast_Lambda *lambda = parse_lambda_definition();
-        lambda->my_ident = decl->my_ident;
-        AST_DELETE(decl);
-        return lambda;
-      }
-      tok = saved_tok;
-      *lex = saved_lex;
-    } else {
-      match_token(token::LEFT_PAREN);
     }
-    // do expression
-  } else {
-    match_token(token::COLON);
-    decl->my_type = parse_type();
-    match_token(token::EQUAL);
-    decl->expr = parse_expression();
   }
   return decl;
+}
+
+Ast_Declaration *Jai_Parser::parse_external_declaration() {
+  if (lex->PeekToken().Type == token::TWO_COLONS) {
+    return parse_lambda_definition();
+  }
+  Ast_Declaration *decl = AST_NEW(Ast_Declaration);
+  decl->my_ident = parse_ident();
+  if (tok.Type == token::COLON) {
+    match_token(token::COLON);
+    decl->my_type = parse_type();
+    if (tok.Type == token::EQUAL) {
+      match_token(token::EQUAL);
+      decl->expr = parse_expression();
+    }
+  } else if (tok.Type == token::COLON_ASSIGN) {
+    match_token(token::COLON_ASSIGN);
+    // do type inference
+    decl->expr = parse_expression();
+  }
+
+  return parse_declaration_attributes(decl);
 }
 
 Ast_Translation_Unit *Jai_Parser::parse_translation_unit(lexer_state *L) {
@@ -674,12 +762,14 @@ Ast_Translation_Unit *Jai_Parser::parse_translation_unit(lexer_state *L) {
 }
 
 struct C_Converter {
-  static void emit_postfix_expression(Ast_Postfix_Expression *expr,
-                                      std::ostream &os);
-  static void emit_expression(Ast_Expression *expr, std::ostream &os);
-  static void emit_statement(Ast_Statement *stmt, std::ostream &os);
-  static void emit_type_info(Ast_Type_Info *info, std::ostream &os);
-  static void emit_ident(Ast_Ident *ident, std::ostream &os);
+  Ast_Translation_Unit *trans_unit;
+  void emit_postfix_expression(Ast_Postfix_Expression *expr, std::ostream &os);
+  void emit_unary_expression(Ast_Expression *expr, std::ostream &os);
+  void emit_expression(Ast_Expression *expr, std::ostream &os);
+  void emit_statement(Ast_Statement *stmt, std::ostream &os);
+  void emit_type_info(Ast_Type_Info *info, std::ostream &os);
+  void emit_ident(Ast_Ident *ident, std::ostream &os);
+  void emit_declaration(Ast_Declaration *decl, std::ostream &os);
   static void emit_translation_unit(Ast_Translation_Unit *tu, std::ostream &os);
 };
 
@@ -687,7 +777,8 @@ void C_Converter::emit_postfix_expression(Ast_Postfix_Expression *expr,
                                           std::ostream &os) {
   if (expr->type == AST_FUNCTION_CALL) {
     auto fc = static_cast<Ast_Function_Call *>(expr);
-    os << fc->my_ident->my_name << "(";
+    os << trans_unit->scope.lookup_function(fc->my_ident->my_name)->symbol_name
+       << "(";
     for (int i = 0; i < fc->params.count; ++i) {
       auto param = fc->params.array[i];
       emit_expression(param, os);
@@ -758,10 +849,47 @@ void C_Converter::emit_postfix_expression(Ast_Postfix_Expression *expr,
   }
 }
 
+void C_Converter::emit_unary_expression(Ast_Expression *expr,
+                                        std::ostream &os) {
+  if (expr->type == AST_UNARY_EXPRESSION) {
+    auto unary = static_cast<Ast_Unary_Expression *>(expr);
+    switch (unary->flags) {
+    case AST_UNARY_REF:
+      os << "&";
+      break;
+    case AST_UNARY_DEREF:
+      os << "*";
+      break;
+    case AST_UNARY_PLUS:
+      os << "+";
+      break;
+    case AST_UNARY_DASH:
+      os << "-";
+      break;
+    case AST_UNARY_BANG:
+      os << "!";
+      break;
+    case AST_UNARY_TILDE:
+      os << "~";
+      break;
+    case AST_UNARY_INC:
+      os << "++";
+      break;
+    case AST_UNARY_DEC:
+      os << "--";
+      break;
+    }
+    if (unary->expr)
+      emit_unary_expression(unary->expr, os);
+  } else {
+    emit_postfix_expression(static_cast<Ast_Postfix_Expression *>(expr), os);
+  }
+}
+
 void C_Converter::emit_expression(Ast_Expression *expr, std::ostream &os) {
   if (!expr)
     return;
-  emit_postfix_expression(static_cast<Ast_Postfix_Expression *>(expr), os);
+  emit_unary_expression(expr, os);
 }
 
 void C_Converter::emit_statement(Ast_Statement *stmt, std::ostream &os) {
@@ -803,15 +931,80 @@ void C_Converter::emit_type_info(Ast_Type_Info *info, std::ostream &os) {
   case AST_TYPE_FLOAT:
     os << "float32";
     break;
+  case AST_TYPE_CHAR:
+    os << "char";
+    break;
   case AST_TYPE_TYPENAME:
     // lookup
+    break;
+  case AST_TYPE_VARIADIC:
+    os << "...";
+    break;
+  case AST_TYPE_POINTER:
+    emit_type_info(info->expanded_info, os);
+    os << "*";
     break;
   }
   os << " ";
 }
 
 void C_Converter::emit_ident(Ast_Ident *ident, std::ostream &os) {
-  os << ident->my_name << " ";
+  os << ident->my_name;
+}
+
+void C_Converter::emit_declaration(Ast_Declaration *decl, std::ostream &os) {
+  if (decl->type == AST_LAMDA) {
+    auto lambda = static_cast<Ast_Lambda *>(decl);
+    emit_type_info(lambda->my_type, os);
+    if (lambda->flags & AST_DECLARATION_FOREIGN) {
+      if (lambda->symbol_name)
+        os << lambda->symbol_name;
+      else
+        os << lambda->my_ident->my_name; // unmangled name
+    } else {
+      emit_ident(lambda->my_ident, os);
+    }
+    os << "(";
+    for (int i = 0; i < lambda->params.count; ++i) {
+      auto param = lambda->params.array[i];
+      emit_declaration(param, os);
+      if (i < lambda->params.count - 1) {
+        os << ", ";
+      }
+    }
+    os << ")";
+    if ((lambda->flags & AST_STATEMENT_DEFINITION) == 0) {
+      os << ";" << std::endl;
+      return;
+    }
+    os << " {" << std::endl;
+    bool returned = false;
+    for (int i = 0; i < lambda->scope.stmts.count; ++i) {
+      auto stmt = lambda->scope.stmts.array[i];
+      if (stmt->flags & AST_STATEMENT_RETURN) {
+        for (int i = lambda->scope.defered_stmts.count - 1; i >= 0; --i) {
+          emit_statement(lambda->scope.defered_stmts.array[i], os);
+        }
+        returned = true;
+      }
+      emit_statement(stmt, os);
+    }
+    if (!returned) {
+      for (int i = lambda->scope.defered_stmts.count - 1; i >= 0; --i) {
+        emit_statement(lambda->scope.defered_stmts.array[i], os);
+      }
+    }
+    os << "}" << std::endl;
+  } else {
+    emit_type_info(decl->my_type, os);
+    if (decl->my_type->atom_type != AST_TYPE_VARIADIC) {
+      emit_ident(decl->my_ident, os);
+    }
+    if (decl->expr) {
+      os << " = ";
+      emit_expression(decl->expr, os);
+    }
+  }
 }
 
 void C_Converter::emit_translation_unit(Ast_Translation_Unit *tu,
@@ -827,32 +1020,11 @@ void C_Converter::emit_translation_unit(Ast_Translation_Unit *tu,
   os << "typedef float float32;" << std::endl;
   os << "typedef double float64;" << std::endl;
   os << "typedef char bool;" << std::endl;
+  C_Converter c;
+  c.trans_unit = tu;
   for (int i = 0; i < tu->scope.stmts.count; ++i) {
     auto decl = static_cast<Ast_Declaration *>(tu->scope.stmts.array[i]);
-    if (decl->type == AST_LAMDA) {
-      auto lambda = static_cast<Ast_Lambda *>(decl);
-      emit_type_info(lambda->my_type, os);
-      emit_ident(lambda->my_ident, os);
-      os << "() "; // TODO params gen
-      os << "{" << std::endl;
-      bool returned = false;
-      for (int i = 0; i < lambda->scope.stmts.count; ++i) {
-        auto stmt = lambda->scope.stmts.array[i];
-        if (stmt->flags & AST_STATEMENT_RETURN) {
-          for (int i = lambda->scope.defered_stmts.count - 1; i >= 0; --i) {
-            emit_statement(lambda->scope.defered_stmts.array[i], os);
-          }
-          returned = true;
-        }
-        emit_statement(stmt, os);
-      }
-      if (!returned) {
-        for (int i = lambda->scope.defered_stmts.count - 1; i >= 0; --i) {
-          emit_statement(lambda->scope.defered_stmts.array[i], os);
-        }
-      }
-      os << "}" << std::endl;
-    }
+    c.emit_declaration(decl, os);
   }
 }
 

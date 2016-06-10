@@ -58,6 +58,7 @@ struct token {
     NEW,
     DELETE,
     DEFER,
+    FOREIGN,
 
     IDENTIFIER,
     TYPE_NAME,
@@ -88,6 +89,8 @@ struct token {
     SUB_ASSIGN,
     COLON_ASSIGN,
     ARROW,
+    ELLIPSIS,
+    TWO_COLONS,
 
     DQSTRING,
     SQSTRING,

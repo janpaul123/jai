@@ -37,6 +37,7 @@ void LexerInit(lexer_state *State, char *Source, char *End) {
   State->Table->Insert("delete", token::DELETE);
   State->Table->Insert("defer", token::DEFER);
   State->Table->Insert("while", token::WHILE);
+  State->Table->Insert("foreign", token::FOREIGN);
 }
 
 token LexerPeekToken(lexer_state *State) {
@@ -62,7 +63,7 @@ std::string LexerGetLine(lexer_state *State, int Line) {
 }
 
 token LexerGetToken(lexer_state *State) {
-  token ReturnToken;
+  token ReturnToken = {};
 
   auto IsWhiteSpace = [](char C) {
     return (C == ' ') || (C == '\t') || (C == '\r') || (C == '\f') ||
@@ -145,8 +146,7 @@ _CheckWhiteSpace:
 
   static auto IsNumber = [](char C) { return ((C >= '0') && (C <= '9')); };
 
-  static auto IsNumberOrDot =
-      [](char C) { return IsNumber(C) || (C == '.'); };
+  static auto IsNumberOrDot = [](char C) { return IsNumber(C) || (C == '.'); };
 
   if (IsNumber(Current[0])) {
     bool IsFloat = false;
@@ -295,6 +295,10 @@ _CheckWhiteSpace:
         ReturnToken.Type = token::COLON_ASSIGN;
         ++State->OffsetCurrent;
         ++Current;
+      } else if (Current[1] == ':') {
+        ReturnToken.Type = token::TWO_COLONS;
+        ++State->OffsetCurrent;
+        ++Current;
       }
     }
     goto _BuildToken;
@@ -315,9 +319,21 @@ _CheckWhiteSpace:
     }
   }
 
+  case '.': {
+    if (Current < State->EndPtr) {
+      if (Current[1] == '.') {
+        ReturnToken.Type = token::ELLIPSIS;
+        ++State->OffsetCurrent;
+        ++Current;
+      }
+      goto _BuildToken;
+    }
+  }
+
   default:
-    ReturnToken.Type = Current[0];
   _BuildToken:
+    if (ReturnToken.Type == 0)
+      ReturnToken.Type = Current[0];
     ReturnToken.Line = State->LineCurrent;
     ReturnToken.Offset = State->OffsetCurrent;
     ++State->OffsetCurrent;
