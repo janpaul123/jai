@@ -85,6 +85,7 @@ enum Ast_Type {
   AST_PRIMARY_EXPRESSION,
   AST_POSTFIX_EXPRESSION,
   AST_UNARY_EXPRESSION,
+  AST_BINARY_EXPRESSION,
 
   AST_HASH_RUN,
 };
@@ -125,13 +126,14 @@ Ast *ast_default_construct(Ast *AST, token tok, char *filename) {
 const int AST_TYPE_VOID = 0;
 const int AST_TYPE_INT = 1;
 const int AST_TYPE_FLOAT = 2;
-const int AST_TYPE_BOOL = 3;
-const int AST_TYPE_CHAR = 4;
-const int AST_TYPE_STRUCT = 5;
-const int AST_TYPE_LAMBDA = 6;
-const int AST_TYPE_TYPENAME = 7;
-const int AST_TYPE_VARIADIC = 8;
-const int AST_TYPE_POINTER = 9;
+const int AST_TYPE_DOUBLE = 3;
+const int AST_TYPE_BOOL = 4;
+const int AST_TYPE_CHAR = 5;
+const int AST_TYPE_STRUCT = 6;
+const int AST_TYPE_LAMBDA = 7;
+const int AST_TYPE_TYPENAME = 8;
+const int AST_TYPE_VARIADIC = 9;
+const int AST_TYPE_POINTER = 10;
 
 struct Ast_Struct : public Ast {
   Ast_Struct() { type = AST_STRUCT; }
@@ -160,7 +162,7 @@ struct Ast_Expression;
 struct Ast_Statement : public Ast {
   Ast_Statement() { type = AST_STATEMENT; }
   Ast_Scope scope;
-  Ast_Expression *expr;
+  Ast_Expression *expr = nullptr;
   int flags = 0;
 };
 
@@ -195,6 +197,19 @@ struct Ast_Unary_Expression : public Ast_Expression {
   Ast_Unary_Expression() { type = AST_UNARY_EXPRESSION; }
   int flags = 0;
   Ast_Expression *expr;
+};
+
+enum {
+  AST_OPERATION_MULTIPLY,
+  AST_OPERATION_DIVIDE,
+  AST_OPERATION_MODULO,
+};
+
+struct Ast_Binary_Expression : public Ast_Expression {
+  Ast_Binary_Expression() { type = AST_BINARY_EXPRESSION; }
+  int operation = 0;
+  Ast_Expression *lexpr;
+  Ast_Expression *rexpr;
 };
 
 enum Primary_Type {
@@ -404,6 +419,7 @@ struct Jai_Parser {
   Ast_Expression *parse_primary_expression();
   Ast_Expression *parse_postfix_expression();
   Ast_Expression *parse_unary_expression();
+  Ast_Expression *parse_multiplicative_expression();
   Ast_Statement *parse_statement();
   Ast_Type_Info *parse_type();
   Ast_Lambda *parse_lambda_definition();
@@ -444,6 +460,10 @@ Ast_Type_Info *Jai_Parser::parse_type() {
     break;
   case token::FLOAT:
     info->atom_type = AST_TYPE_FLOAT;
+    break;
+  case token::DOUBLE:
+    info->atom_type = AST_TYPE_DOUBLE;
+    break;
   case token::INT:
     info->atom_type = AST_TYPE_INT;
     break;
@@ -462,7 +482,8 @@ Ast_Type_Info *Jai_Parser::parse_type() {
   case token::CARET:
     break;
   default:
-    printf("unexpected token %s\n", TokenToString(tok).c_str());
+    printf("%d:%d:unexpected token %s\n", tok.Line, tok.Offset,
+           TokenToString(tok).c_str());
   }
   if (tok.Type == token::CARET) {
     match_token(token::CARET);
@@ -645,8 +666,31 @@ Ast_Expression *Jai_Parser::parse_unary_expression() {
   return unary;
 }
 
+Ast_Expression *Jai_Parser::parse_multiplicative_expression() {
+  Ast_Expression *lexpr = parse_unary_expression();
+  auto mult = AST_NEW(Ast_Binary_Expression);
+  switch (tok.Type) {
+  case token::STAR:
+    mult->operation = AST_OPERATION_MULTIPLY;
+    break;
+  case token::SLASH:
+    mult->operation = AST_OPERATION_DIVIDE;
+    break;
+  case token::PERCENT:
+    mult->operation = AST_OPERATION_MODULO;
+    break;
+  default:
+    AST_DELETE(mult);
+    return lexpr;
+  }
+  match_token(tok.Type);
+  mult->lexpr = lexpr;
+  mult->rexpr = parse_multiplicative_expression();
+  return mult;
+}
+
 Ast_Expression *Jai_Parser::parse_expression() {
-  return parse_unary_expression();
+  return parse_multiplicative_expression();
 }
 
 Ast_Statement *Jai_Parser::parse_statement() {
@@ -682,7 +726,11 @@ Ast_Statement *Jai_Parser::parse_statement() {
     return stmt;
   } else if (tok.Type == token::FOR) {
 
-  } else {
+  } else if (tok.Type == token::IDENTIFIER &&
+             (lex->PeekToken().Type == token::COLON_ASSIGN ||
+              lex->PeekToken().Type == token::TWO_COLONS ||
+              lex->PeekToken().Type == token::COLON)) {
+    return parse_external_declaration();
   }
 
   auto stmt = AST_NEW(Ast_Expression_Statement);
@@ -765,6 +813,7 @@ struct C_Converter {
   Ast_Translation_Unit *trans_unit;
   void emit_postfix_expression(Ast_Postfix_Expression *expr, std::ostream &os);
   void emit_unary_expression(Ast_Expression *expr, std::ostream &os);
+  void emit_binary_expression(Ast_Expression *expr, std::ostream &os);
   void emit_expression(Ast_Expression *expr, std::ostream &os);
   void emit_statement(Ast_Statement *stmt, std::ostream &os);
   void emit_type_info(Ast_Type_Info *info, std::ostream &os);
@@ -886,10 +935,32 @@ void C_Converter::emit_unary_expression(Ast_Expression *expr,
   }
 }
 
+void C_Converter::emit_binary_expression(Ast_Expression *expr,
+                                         std::ostream &os) {
+  if (expr->type == AST_BINARY_EXPRESSION) {
+    auto bin = static_cast<Ast_Binary_Expression *>(expr);
+    emit_expression(bin->lexpr, os);
+    switch (bin->operation) {
+    case AST_OPERATION_MODULO:
+      os << " %% ";
+      break;
+    case AST_OPERATION_DIVIDE:
+      os << " / ";
+      break;
+    case AST_OPERATION_MULTIPLY:
+      os << " * ";
+      break;
+    }
+    emit_expression(bin->rexpr, os);
+  } else {
+    emit_unary_expression(expr, os);
+  }
+}
+
 void C_Converter::emit_expression(Ast_Expression *expr, std::ostream &os) {
   if (!expr)
     return;
-  emit_unary_expression(expr, os);
+  emit_binary_expression(expr, os);
 }
 
 void C_Converter::emit_statement(Ast_Statement *stmt, std::ostream &os) {
@@ -898,6 +969,9 @@ void C_Converter::emit_statement(Ast_Statement *stmt, std::ostream &os) {
     os << "while ";
     emit_expression(iter->cond, os);
     emit_statement(iter->stmt, os);
+    return;
+  } else if (stmt->type == AST_DECLARATION) {
+    emit_declaration(static_cast<Ast_Declaration *>(stmt), os);
     return;
   }
   if (stmt->flags & AST_STATEMENT_RETURN) {
@@ -930,6 +1004,9 @@ void C_Converter::emit_type_info(Ast_Type_Info *info, std::ostream &os) {
     break;
   case AST_TYPE_FLOAT:
     os << "float32";
+    break;
+  case AST_TYPE_DOUBLE:
+    os << "float64";
     break;
   case AST_TYPE_CHAR:
     os << "char";
@@ -1013,13 +1090,13 @@ void C_Converter::emit_translation_unit(Ast_Translation_Unit *tu,
   os << std::fixed;
   os << "/* machinamentum jai compiler v0.0.1 */" << std::endl;
   os << "#include <stdint.h>" << std::endl;
+  os << "#include <stdbool.h>" << std::endl;
   os << "typedef int32_t s32;" << std::endl;
   os << "typedef int64_t s64;" << std::endl;
   os << "typedef uint32_t u32;" << std::endl;
   os << "typedef uint64_t u64;" << std::endl;
   os << "typedef float float32;" << std::endl;
   os << "typedef double float64;" << std::endl;
-  os << "typedef char bool;" << std::endl;
   C_Converter c;
   c.trans_unit = tu;
   for (int i = 0; i < tu->scope.stmts.count; ++i) {

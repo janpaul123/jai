@@ -24,6 +24,7 @@ void LexerInit(lexer_state *State, char *Source, char *End) {
   State->Table->Insert("const", token::CONST);
   State->Table->Insert("bool", token::BOOL);
   State->Table->Insert("float", token::FLOAT);
+  State->Table->Insert("double", token::DOUBLE);
   State->Table->Insert("char", token::CHAR);
   State->Table->Insert("int", token::INT);
   State->Table->Insert("break", token::BREAK);
@@ -116,13 +117,14 @@ _CheckWhiteSpace:
            ((C >= 'a') && (C <= 'z'));
   };
 
+  static auto IsAsciiLetterOrNumber = [](char C) {
+    return ((C >= '0') && (C <= '9')) ||
+           ((C >= 'A') && (C <= 'Z')) || ((C >= 'a') && (C <= 'z'));
+  };
+
   if (IsAsciiLetter(Current[0])) {
-    auto IsAsciiLetterOrNumber = [](char C) {
-      return (C == '_') || ((C >= '0') && (C <= '9')) ||
-             ((C >= 'A') && (C <= 'Z')) || ((C >= 'a') && (C <= 'z'));
-    };
     char *End = Current + 1;
-    while (IsAsciiLetterOrNumber(*End) && (End < State->EndPtr)) {
+    while ((IsAsciiLetterOrNumber(*End) || (*End == '_')) && (End < State->EndPtr)) {
       ++End;
     }
     std::string TheID = std::string(Current, End - Current);
@@ -149,6 +151,21 @@ _CheckWhiteSpace:
   static auto IsNumberOrDot = [](char C) { return IsNumber(C) || (C == '.'); };
 
   if (IsNumber(Current[0])) {
+    if (Current[0] == '0' && (Current < State->EndPtr)) {
+      if (Current[1] == 'x') {
+        char *End = Current + 2;
+        while (IsAsciiLetterOrNumber(*End) && (End < State->EndPtr)) {
+          ++End;
+        }
+        ReturnToken.Type = token::INTCONSTANT;
+        ReturnToken.IntValue = strtoul(Current + 2, &End, 16);
+        ReturnToken.Line = State->LineCurrent;
+        ReturnToken.Offset = State->OffsetCurrent;
+        State->OffsetCurrent += End - Current;
+        Current = End;
+        goto _Exit;
+      }
+    }
     bool IsFloat = false;
     char *End = Current;
     while (IsNumberOrDot(*End) && (End < State->EndPtr)) {

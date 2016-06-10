@@ -43,6 +43,7 @@ struct token {
     CONST,
     BOOL,
     FLOAT,
+    DOUBLE,
     INT,
     CHAR,
     BREAK,
