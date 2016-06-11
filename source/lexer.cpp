@@ -78,13 +78,8 @@ _CheckWhiteSpace:
   while (IsWhiteSpace(Current[0]) && (Current < State->EndPtr)) {
     ++State->OffsetCurrent;
     if (Current[0] == '\n') {
-      ReturnToken.Type = token::NEWLINE;
-      ReturnToken.Line = State->LineCurrent;
-      ReturnToken.Offset = State->OffsetCurrent;
       ++State->LineCurrent;
       State->OffsetCurrent = 0;
-      ++Current;
-      goto _Exit;
     }
     ++Current;
   }
@@ -97,20 +92,6 @@ _CheckWhiteSpace:
       goto _CheckWhiteSpace;
     }
   }
-  // TODO preprocessor
-  // if (Current[0] == '#' && (Current < State->EndPtr)) {
-  //   char *End = Current;
-  //   while (*End != '\n' && (End < State->EndPtr)) {
-  //     ++End;
-  //   }
-  //   ReturnToken.Id = std::string(Current, End - Current);
-  //   ReturnToken.Type = token::CPPSTRING;
-  //   ReturnToken.Line = State->LineCurrent;
-  //   ReturnToken.Offset = State->OffsetCurrent;
-  //   State->OffsetCurrent += End - Current;
-  //   Current = End;
-  //   goto _Exit;
-  // }
 
   static auto IsAsciiLetter = [](char C) {
     return (C == '_') || ((C >= 'A') && (C <= 'Z')) ||

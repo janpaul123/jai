@@ -270,7 +270,7 @@ struct Ast_Hash_Directive : public Ast {
 
 struct Ast_Hash_Run : public Ast_Hash_Directive {
   Ast_Hash_Run() { type = AST_HASH_RUN; }
-  Ast_Function_Call *fc;
+  Ast_Function_Call *fc; // TODO should be expr
 };
 
 struct Ast_Translation_Unit : public Ast {
@@ -425,31 +425,18 @@ struct Jai_Parser {
   Ast_Lambda *parse_lambda_definition();
   Ast_Expression *parse_expression();
   Ast_Ident *parse_ident();
+  Ast_Declaration *parse_declaration();
   Ast_Declaration *parse_external_declaration();
   static Ast_Translation_Unit *parse_translation_unit(lexer_state *L);
 };
 
 void Jai_Parser::match_token(int type) {
   if (tok.Type != type) {
-    printf("%d:%d:expected %s but got %s\n", tok.Line, tok.Offset,
-           TokenToString(type).c_str(), TokenToString(tok).c_str());
+    printf("%d:%d:expected %s but got %s:%d\n", tok.Line, tok.Offset,
+           TokenToString(type).c_str(), TokenToString(tok).c_str(), tok.Type);
+    throw "THE ERROR\n";
   }
   tok = lex->GetToken();
-
-  while (tok.Type == token::NEWLINE) {
-    tok = lex->GetToken();
-    if (tok.Type == token::HASH) {
-      tok = lex->GetToken();
-      auto ident = parse_ident();
-      if (strcmp("run", ident->my_name) == 0) {
-        auto dir = AST_NEW(Ast_Hash_Run);
-        dir->fc = static_cast<Ast_Function_Call *>(parse_expression());
-        root_node->hashes.push(dir);
-      } else {
-        printf("unknown directive %s\n", ident->my_name);
-      }
-    }
-  }
 }
 
 Ast_Type_Info *Jai_Parser::parse_type() {
@@ -501,7 +488,7 @@ Ast_Lambda *Jai_Parser::parse_lambda_definition() {
   match_token(token::TWO_COLONS);
   match_token(token::LEFT_PAREN);
   while (tok.Type != token::RIGHT_PAREN) {
-    lambda->params.push(parse_external_declaration());
+    lambda->params.push(parse_declaration());
     if (tok.Type != token::COMMA)
       break;
     else
@@ -730,7 +717,7 @@ Ast_Statement *Jai_Parser::parse_statement() {
              (lex->PeekToken().Type == token::COLON_ASSIGN ||
               lex->PeekToken().Type == token::TWO_COLONS ||
               lex->PeekToken().Type == token::COLON)) {
-    return parse_external_declaration();
+    return parse_declaration();
   }
 
   auto stmt = AST_NEW(Ast_Expression_Statement);
@@ -767,7 +754,7 @@ Jai_Parser::parse_declaration_attributes(Ast_Declaration *decl) {
   return decl;
 }
 
-Ast_Declaration *Jai_Parser::parse_external_declaration() {
+Ast_Declaration *Jai_Parser::parse_declaration() {
   if (lex->PeekToken().Type == token::TWO_COLONS) {
     return parse_lambda_definition();
   }
@@ -787,6 +774,16 @@ Ast_Declaration *Jai_Parser::parse_external_declaration() {
   }
 
   return parse_declaration_attributes(decl);
+}
+
+Ast_Declaration *Jai_Parser::parse_external_declaration() {
+  if (lex->PeekToken().Type == token::TWO_COLONS) {
+    return parse_declaration();
+  }
+  auto decl = parse_declaration();
+  decl->flags |= AST_STATEMENT_DEFINITION;
+  match_token(token::SEMICOLON);
+  return decl;
 }
 
 Ast_Translation_Unit *Jai_Parser::parse_translation_unit(lexer_state *L) {
@@ -1080,6 +1077,9 @@ void C_Converter::emit_declaration(Ast_Declaration *decl, std::ostream &os) {
     if (decl->expr) {
       os << " = ";
       emit_expression(decl->expr, os);
+    }
+    if (decl->flags & AST_STATEMENT_DEFINITION) {
+      os << ";" << std::endl;
     }
   }
 }
