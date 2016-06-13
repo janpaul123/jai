@@ -51,6 +51,9 @@ void C_Converter::emit_postfix_expression(Ast_Postfix_Expression *expr,
         case '\t':
           os << "\\t";
           break;
+        case '\v':
+          os << "\\v";
+          break;
         case '\'':
           os << "\\'";
           break;
