@@ -311,7 +311,6 @@ void Jai_Interpreter::translate_expression(Ast_Expression *expr,
       translate_expression(param, func);
     }
     func->instrs.push(form_data_ref(INSTR_CALL, index));
-    printf("Function call to %s\n", fc->my_ident->my_name);
   } else if (expr->type == AST_PRIMARY_EXPRESSION) {
     auto pe = static_cast<Ast_Primary_Expression *>(expr);
     switch (pe->expr_type) {
@@ -320,21 +319,18 @@ void Jai_Interpreter::translate_expression(Ast_Expression *expr,
       int index = data_alloc(sizeof(u64));
       write_ptr(index, reinterpret_cast<void *>(pe->int_const));
       func->instrs.push(form_data_ref(INSTR_PUSH, index));
-      printf("PUSH INT %llu\n", pe->int_const);
       break;
     }
     case AST_PT_CONST_FLOAT: {
       int index = data_alloc(sizeof(double));
       write_ptr(index, reinterpret_cast<void *>(*reinterpret_cast<u64*>(&pe->float_const)));
       func->instrs.push(form_data_ref(INSTR_PUSH, index));
-      printf("PUSH FLOAT %f\n", pe->float_const);
       break;
     }
     case AST_PT_STRING_LITERAL: {
       int index = data_alloc(sizeof(char *));
       write_ptr(index, pe->string_literal.array);
       func->instrs.push(form_data_ref(INSTR_PUSH, index));
-      printf("PUSH STRING %s\n", pe->string_literal.array);
       break;
     }
     case AST_PT_IDENTIFIER:
@@ -400,10 +396,6 @@ void Jai_Interpreter::translate_tree() {
   }
 }
 
-extern "C" {
-void test_func() { printf("TEST FUNC\n\n"); }
-};
-
 int main(int argc, char **argv) {
   bool PrintTrees = false;
   bool output_llvm = false;
@@ -443,7 +435,7 @@ int main(int argc, char **argv) {
   Jai_Interpreter *interp = new Jai_Interpreter();
   interp->trans_unit = trans_unit;
   interp->translate_tree();
-  
+
   if (OutputFilePath) {
     std::ofstream fs;
     fs.open(OutputFilePath);
