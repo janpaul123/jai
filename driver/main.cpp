@@ -443,7 +443,7 @@ int main(int argc, char **argv) {
   Jai_Interpreter *interp = new Jai_Interpreter();
   interp->trans_unit = trans_unit;
   interp->translate_tree();
-  interp->execute_function(interp->find_func_by_name("main"));
+  
   if (OutputFilePath) {
     std::ofstream fs;
     fs.open(OutputFilePath);
