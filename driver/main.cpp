@@ -28,16 +28,6 @@ char *SlurpFile(const char *FilePath, long *FileSize) {
   return Buffer;
 }
 
-static int ErrorCount = 0;
-static void ErrorCallback(const std::string &ErrMsg,
-                          const std::string &OffendingLine, int LineNumber,
-                          int LineOffset) {
-  printf("\033[1m\e[31merror\e[0m\033[1m:%d:%d: %s\n\033[0m%s\n", LineNumber,
-         LineOffset, ErrMsg.c_str(), OffendingLine.c_str());
-  printf("%*c^\n", LineOffset, ' ');
-  ++ErrorCount;
-}
-
 static void PrintHelp(const std::string &ExecName) {}
 #include <stdint.h>
 typedef uint32_t u32;
@@ -205,8 +195,6 @@ struct Jai_Interpreter {
 
     return dlsym(0, name);
   }
-
-  void report_error(const char *err);
 
   void execute_function_call(u64 instr);
   void execute_function(Function *func);

@@ -8,6 +8,34 @@ namespace std {
 template <typename T> string to_string(T Value);
 };
 
+inline std::string unwind_dqstring(const std::string &s) {
+  std::string out;
+  for (char c : s) {
+    switch (c) {
+    case '\\':
+    out += "\\\\";
+    break;
+    case '\n':
+      out += "\\n";
+      break;
+    case '\t':
+      out += "\\t";
+      break;
+    case '\r':
+      out += "\\r";
+      break;
+    case '\v':
+      out += "\\v";
+      break;
+    default:
+      out += c;
+      break;
+    }
+  }
+
+  return out;
+}
+
 struct token {
 
   enum {
@@ -121,9 +149,9 @@ struct token {
     if (T.Type == FIELD_SELECTION)
       return T.Id;
     if (T.Type == DQSTRING)
-      return "\"" + T.Id + "\"";
+      return "\"" + unwind_dqstring(T.Id) + "\"";
     if (T.Type == SQSTRING)
-      return "\'" + T.Id + "\'";
+      return "\'" + unwind_dqstring(T.Id) + "\'";
     switch (T.Type) {
     case LEFT_OP:
       return "<<";
