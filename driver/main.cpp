@@ -302,6 +302,7 @@ void Jai_Interpreter::execute_function(Jai_Interpreter::Function *func) {
 
 void Jai_Interpreter::translate_expression(Ast_Expression *expr,
                                            Jai_Interpreter::Function *func) {
+  if (!expr) return;
   if (expr->type == AST_FUNCTION_CALL) {
     auto fc = static_cast<Ast_Function_Call *>(expr);
     int index = data_alloc(sizeof(fc));
