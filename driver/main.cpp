@@ -3,6 +3,15 @@
 #include <fstream>
 #include <iostream>
 
+typedef uint64_t u64;
+typedef uint32_t u32;
+typedef uint16_t u16;
+typedef uint8_t u8;
+typedef int64_t s64;
+typedef int32_t s32;
+typedef int16_t s16;
+typedef int8_t s8;
+
 char *SlurpFile(const char *FilePath, long *FileSize) {
   std::ifstream is(FilePath);
   if (!is)
@@ -69,1045 +78,335 @@ template <typename T> struct Array {
 
 typedef Array<char> String;
 
-enum Ast_Type {
-  AST_TRANSLATION_UNIT = 1,
-  AST_DECLARATION,
-  AST_LAMDA,
-  AST_EXPRESSION,
-  AST_STATEMENT,
-  AST_TYPE_INFO,
-  AST_STRUCT,
-  AST_IDENTIFIER,
-  AST_SELECTION_STATEMENT,
-  AST_ITERATION_STATEMENT,
-  AST_EXPRESSION_STATEMENT,
-  AST_FUNCTION_CALL,
-  AST_PRIMARY_EXPRESSION,
-  AST_POSTFIX_EXPRESSION,
-  AST_UNARY_EXPRESSION,
-  AST_BINARY_EXPRESSION,
-
-  AST_HASH_RUN,
-};
-
-struct Ast {
-  int line_number;
-  int line_offset;
-  Ast_Type type;
-  char *filename;
-};
-
-struct Ast_Statement;
-struct Ast_Lambda;
-
-struct Ast_Scope : public Ast {
-  symtable symbols;
-  Array<Ast_Statement *> stmts;
-  Array<Ast_Statement *> defered_stmts;
-  Ast_Scope *parent_scope;
-
-  Ast_Lambda *lookup_function(const char *name);
-  void push_stmt(Ast_Statement *stmt);
-};
-
-Ast *ast_default_construct(Ast *AST, token tok, char *filename) {
-  AST->line_number = tok.Line;
-  AST->line_offset = tok.Offset;
-  AST->filename = filename;
-  return AST;
-}
-
-#define AST_NEW(type_name)                                                     \
-  (static_cast<type_name *>(                                                   \
-      ast_default_construct(new type_name(), tok, filename)))
-
-#define AST_DELETE(x) (delete x)
-
-const int AST_TYPE_VOID = 0;
-const int AST_TYPE_INT = 1;
-const int AST_TYPE_FLOAT = 2;
-const int AST_TYPE_DOUBLE = 3;
-const int AST_TYPE_BOOL = 4;
-const int AST_TYPE_CHAR = 5;
-const int AST_TYPE_STRUCT = 6;
-const int AST_TYPE_LAMBDA = 7;
-const int AST_TYPE_TYPENAME = 8;
-const int AST_TYPE_VARIADIC = 9;
-const int AST_TYPE_POINTER = 10;
-
-struct Ast_Struct : public Ast {
-  Ast_Struct() { type = AST_STRUCT; }
-};
-
-struct Ast_Type_Info : public Ast {
-  Ast_Type_Info() { type = AST_TYPE_INFO; }
-  int atom_type;
-  Ast_Type_Info *expanded_info;
-  Ast_Struct *struct_i_implement;
-};
-
-struct Ast_Ident : public Ast {
-  Ast_Ident() { type = AST_IDENTIFIER; }
-  char *my_name;
-};
-
-const int AST_STATEMENT_DEFER = (1 << 0);
-const int AST_STATEMENT_RETURN = (1 << 1);
-const int AST_STATEMENT_COMPOUND = (1 << 2);
-const int AST_STATEMENT_DEFINITION = (1 << 3);
-const int AST_DECLARATION_FOREIGN = (1 << 4);
-
-struct Ast_Expression;
-
-struct Ast_Statement : public Ast {
-  Ast_Statement() { type = AST_STATEMENT; }
-  Ast_Scope scope;
-  Ast_Expression *expr = nullptr;
-  int flags = 0;
-};
-
-struct Ast_Expression : public Ast {
-  Ast_Expression() { type = AST_EXPRESSION; }
-  Ast_Type_Info *inferred_type;
-};
-
-const int AST_PF_FIELD_SELECTION = 1;
-const int AST_PF_INC = 2;
-const int AST_PF_DEC = 3;
-const int AST_PF_INDEX = 4;
-
-struct Ast_Postfix_Expression : public Ast_Expression {
-  Ast_Postfix_Expression() { type = AST_POSTFIX_EXPRESSION; }
-  int flags = 0;
-  Ast_Expression *expr;
-  Ast_Expression *int_expr;
-  Ast_Ident *my_ident;
-};
-
-const int AST_UNARY_INC = 1;
-const int AST_UNARY_DEC = 2;
-const int AST_UNARY_PLUS = 3;
-const int AST_UNARY_DASH = 4;
-const int AST_UNARY_BANG = 5;
-const int AST_UNARY_TILDE = 6;
-const int AST_UNARY_DEREF = 7; // '*'
-const int AST_UNARY_REF = 8;   // '&'
-
-struct Ast_Unary_Expression : public Ast_Expression {
-  Ast_Unary_Expression() { type = AST_UNARY_EXPRESSION; }
-  int flags = 0;
-  Ast_Expression *expr;
-};
-
-enum {
-  AST_OPERATION_MULTIPLY,
-  AST_OPERATION_DIVIDE,
-  AST_OPERATION_MODULO,
-};
-
-struct Ast_Binary_Expression : public Ast_Expression {
-  Ast_Binary_Expression() { type = AST_BINARY_EXPRESSION; }
-  int operation = 0;
-  Ast_Expression *lexpr;
-  Ast_Expression *rexpr;
-};
-
-enum Primary_Type {
-  AST_PT_CONST_INT,
-  AST_PT_CONST_FLOAT,
-  AST_PT_STRING_LITERAL,
-  AST_PT_CONST_BOOL,
-  AST_PT_IDENTIFIER,
-  AST_PT_PAREN,
-};
-
-struct Ast_Primary_Expression : public Ast_Postfix_Expression {
-  Ast_Primary_Expression() { type = AST_PRIMARY_EXPRESSION; }
-  Primary_Type expr_type;
-  long int_const;
-  double float_const;
-  String string_literal;
-  Ast_Ident *ident;
-  Ast_Expression *nested_expr;
-};
-
-struct Ast_Function_Call : public Ast_Postfix_Expression {
-  Ast_Function_Call() { type = AST_FUNCTION_CALL; }
-  Array<Ast_Expression *> params;
-};
-
-struct Ast_Selection_Statement : public Ast_Statement {
-  Ast_Selection_Statement() { type = AST_SELECTION_STATEMENT; }
-  Ast_Statement *else_stmt;
-};
-
-struct Ast_Declaration : public Ast_Statement {
-  Ast_Declaration() { type = AST_DECLARATION; }
-  Ast_Type_Info *my_type;
-  Ast_Ident *my_ident;
-  char *symbol_name;
-};
-
-struct Ast_Iteration_Statement : public Ast_Statement {
-  Ast_Iteration_Statement() { type = AST_ITERATION_STATEMENT; }
-  Ast_Declaration *decl;
-  Ast_Expression *cond;
-  Ast_Statement *stmt;
-};
-
-struct Ast_Expression_Statement : public Ast_Statement {
-  Ast_Expression_Statement() { type = AST_EXPRESSION_STATEMENT; }
-};
-
-struct Ast_Lambda : public Ast_Declaration {
-  Ast_Lambda() { type = AST_LAMDA; }
-  Array<Ast_Declaration *> params;
-};
-
-struct Ast_Hash_Directive : public Ast {
-  Ast_Ident *ident;
-};
-
-struct Ast_Hash_Run : public Ast_Hash_Directive {
-  Ast_Hash_Run() { type = AST_HASH_RUN; }
-  Ast_Function_Call *fc; // TODO should be expr
-};
-
-struct Ast_Translation_Unit : public Ast {
-  Ast_Translation_Unit() { type = AST_TRANSLATION_UNIT; }
-  Array<Ast_Hash_Directive *> hashes;
-  Ast_Scope scope;
-};
-
-Ast_Lambda *Ast_Scope::lookup_function(const char *name) {
-  auto e = symbols.Lookup(name);
-  if (e) {
-    if (e->ast && e->ast->type == AST_LAMDA) {
-      auto lambda = static_cast<Ast_Lambda *>(e->ast);
-      if (strcmp(lambda->my_ident->my_name, name) == 0)
-        return lambda;
-    }
-  }
-  if (parent_scope)
-    return parent_scope->lookup_function(name);
-  return nullptr;
-}
-
-void Ast_Scope::push_stmt(Ast_Statement *stmt) {
-  stmt->scope.parent_scope = this;
-  if (stmt->flags & AST_STATEMENT_DEFER) {
-    defered_stmts.push(stmt);
-  } else {
-    stmts.push(stmt);
-  }
-}
+#include "parser.cpp"
+#include "c_converter.cpp"
 
 #include <dlfcn.h>
 
 struct Jai_Interpreter {
-  enum {
-    COM_NOP = 0,
-    COM_PUSH,
-    COM_POP,
-    COM_CALL_JAI,
-    COM_CALL_NATIVE,
-
+  union reg {
+    void *ptr;
+    uint64_t i;
+    double f;
   };
 
-  struct Jai_Command {
-    char type;
-    union {
-      int int32;
-      void *ptr;
-      Ast_Lambda *func;
-      float float32;
-    };
+  reg registers[16];
+  enum : u8 {
+    INSTR_NOP = 0,
+    INSTR_CALL,
+    INSTR_PUSH,
+    INSTR_POP,
+
   };
+  struct Function {
+    char *name;
+    Array<u64> instrs;
+  };
+  Array<Function *> functions;
   Array<void *> linked_libs;
-
-  Jai_Interpreter() { load_library(nullptr); }
-
-  void *find_symbol(const char *sym_name);
-  void *find_symbol_in_lib(void *lib_handle, const char *sym_name);
-  void *load_library(const char *libname);
-  Array<Jai_Command> translate_function(Ast_Lambda *lambda);
-  void run_function(Ast_Lambda *lambda);
-};
-
-extern "C" {
-void compiler_test_message() { printf("I am compiler code!\n"); }
-};
-
-void *Jai_Interpreter::find_symbol(const char *sym_name) {
-  for (int i = 0; i < linked_libs.count; ++i) {
-    if (!linked_libs.array[i])
-      continue;
-    void *ptr = find_symbol_in_lib(linked_libs.array[i], sym_name);
-    if (ptr) {
-      return ptr;
-    }
-  }
-  printf("Couldn't find symbol %s\n", sym_name);
-  return nullptr;
-}
-
-void *Jai_Interpreter::find_symbol_in_lib(void *lib_handle,
-                                          const char *sym_name) {
-  return dlsym(lib_handle, sym_name);
-}
-
-void *Jai_Interpreter::load_library(const char *libname) {
-  void *lib = dlopen(libname, RTLD_LAZY);
-  if (!lib) {
-    printf("couldn't open lib %s\n", libname);
-  }
-  linked_libs.push(lib);
-  return lib;
-}
-
-Array<Jai_Interpreter::Jai_Command>
-Jai_Interpreter::translate_function(Ast_Lambda *lambda) {
-  Array<Jai_Command> cmd_qeue;
-  for (int i = 0; i < lambda->scope.stmts.count; ++i) {
-    auto expr = lambda->scope.stmts.array[i]->expr;
-    if (expr->type == AST_FUNCTION_CALL) {
-      auto fc = static_cast<Ast_Function_Call *>(expr);
-      auto func = lambda->scope.lookup_function(fc->my_ident->my_name);
-      if (func) {
-        Jai_Command cmd;
-        cmd.type = COM_CALL_JAI;
-        cmd.ptr = func;
-        cmd_qeue.push(cmd);
-      } else {
-        Jai_Command cmd;
-        cmd.type = COM_CALL_NATIVE;
-        cmd.ptr = find_symbol(fc->my_ident->my_name);
-        cmd_qeue.push(cmd);
-      }
-    }
-  }
-  return cmd_qeue;
-}
-
-void Jai_Interpreter::run_function(Ast_Lambda *lambda) {
-  Array<Jai_Command> cmd_qeue = translate_function(lambda);
-  for (int i = 0; i < cmd_qeue.count; ++i) {
-    auto cmd = cmd_qeue.array[i];
-    switch (cmd.type) {
-    case COM_CALL_NATIVE: {
-      void (*func_ptr)() = (void (*)())(cmd.ptr);
-      func_ptr();
-      break;
-    }
-    case COM_CALL_JAI: {
-      auto func = static_cast<Ast_Lambda *>(cmd.ptr);
-      run_function(func);
-      break;
-    }
-    }
-  }
-}
-
-struct Jai_Parser {
-  lexer_state *lex;
-  token tok;
-  char *filename;
-  Ast_Translation_Unit *root_node;
-
-  void match_token(int type);
-  Ast_Declaration *parse_declaration_attributes(Ast_Declaration *decl);
-  Ast_Expression *parse_primary_expression();
-  Ast_Expression *parse_postfix_expression();
-  Ast_Expression *parse_unary_expression();
-  Ast_Expression *parse_multiplicative_expression();
-  Ast_Statement *parse_statement();
-  Ast_Type_Info *parse_type();
-  Ast_Lambda *parse_lambda_definition();
-  Ast_Expression *parse_expression();
-  Ast_Ident *parse_ident();
-  Ast_Declaration *parse_declaration();
-  Ast_Declaration *parse_external_declaration();
-  static Ast_Translation_Unit *parse_translation_unit(lexer_state *L);
-};
-
-void Jai_Parser::match_token(int type) {
-  if (tok.Type != type) {
-    printf("%d:%d:expected %s but got %s:%d\n", tok.Line, tok.Offset,
-           TokenToString(type).c_str(), TokenToString(tok).c_str(), tok.Type);
-    throw "THE ERROR\n";
-  }
-  tok = lex->GetToken();
-}
-
-Ast_Type_Info *Jai_Parser::parse_type() {
-  Ast_Type_Info *info = AST_NEW(Ast_Type_Info);
-  switch (tok.Type) {
-  case token::BOOL:
-    info->atom_type = AST_TYPE_BOOL;
-    break;
-  case token::FLOAT:
-    info->atom_type = AST_TYPE_FLOAT;
-    break;
-  case token::DOUBLE:
-    info->atom_type = AST_TYPE_DOUBLE;
-    break;
-  case token::INT:
-    info->atom_type = AST_TYPE_INT;
-    break;
-  case token::CHAR:
-    info->atom_type = AST_TYPE_CHAR;
-    break;
-  case token::VOID:
-    info->atom_type = AST_TYPE_VOID;
-    break;
-  case token::ELLIPSIS:
-    info->atom_type = AST_TYPE_VARIADIC;
-    break;
-  case token::IDENTIFIER:
-    // do type lookup
-    break;
-  case token::CARET:
-    break;
-  default:
-    printf("%d:%d:unexpected token %s\n", tok.Line, tok.Offset,
-           TokenToString(tok).c_str());
-  }
-  if (tok.Type == token::CARET) {
-    match_token(token::CARET);
-    info->atom_type = AST_TYPE_POINTER;
-    info->expanded_info = parse_type();
-    return info;
-  }
-  match_token(tok.Type);
-  return info;
-}
-
-Ast_Lambda *Jai_Parser::parse_lambda_definition() {
-  Ast_Lambda *lambda = AST_NEW(Ast_Lambda);
-  lambda->my_ident = parse_ident();
-  match_token(token::TWO_COLONS);
-  match_token(token::LEFT_PAREN);
-  while (tok.Type != token::RIGHT_PAREN) {
-    lambda->params.push(parse_declaration());
-    if (tok.Type != token::COMMA)
-      break;
-    else
-      match_token(token::COMMA);
-  }
-  match_token(token::RIGHT_PAREN);
-  match_token(token::ARROW);
-  lambda->my_type = parse_type();
-  parse_declaration_attributes(lambda);
-  if (tok.Type == token::LEFT_BRACE) {
-    match_token(token::LEFT_BRACE);
-    while (tok.Type != token::RIGHT_BRACE) {
-      auto stmt = parse_statement();
-      lambda->scope.push_stmt(stmt);
-    }
-    match_token(token::RIGHT_BRACE);
-    lambda->flags |= AST_STATEMENT_DEFINITION;
-  } else {
-    match_token(token::SEMICOLON);
-  }
-  return lambda;
-}
-
-Ast_Expression *Jai_Parser::parse_primary_expression() {
-  auto pe = AST_NEW(Ast_Primary_Expression);
-  switch (tok.Type) {
-  case token::INTCONSTANT:
-    pe->expr_type = AST_PT_CONST_INT;
-    pe->int_const = tok.IntValue;
-    match_token(tok.Type);
-    return pe;
-  case token::FLOATCONSTANT:
-    pe->expr_type = AST_PT_CONST_FLOAT;
-    pe->float_const = tok.FloatValue;
-    match_token(tok.Type);
-    return pe;
-  case token::BOOLCONSTANT:
-    pe->expr_type = AST_PT_CONST_BOOL;
-    pe->int_const = tok.BoolValue;
-    match_token(tok.Type);
-    return pe;
-  case token::DQSTRING: {
-    pe->expr_type = AST_PT_STRING_LITERAL;
-    char *str = (char *)calloc(1, tok.Id.length() + 1);
-    memcpy(str, tok.Id.c_str(), tok.Id.length());
-    pe->string_literal.array = str;
-    pe->string_literal.count = tok.Id.length();
-    pe->string_literal.array_size = tok.Id.length() + 1;
-    match_token(tok.Type);
-    return pe;
-  }
-  case token::IDENTIFIER: {
-    pe->expr_type = AST_PT_IDENTIFIER;
-    auto ident = parse_ident();
-    pe->ident = ident;
-    return pe;
-  }
-  case token::LEFT_PAREN:
-    match_token(token::LEFT_PAREN);
-    pe->expr_type = AST_PT_PAREN;
-    pe->nested_expr = parse_expression();
-    match_token(token::RIGHT_PAREN);
-    return pe;
-  }
-
-  return nullptr;
-}
-
-Ast_Expression *Jai_Parser::parse_postfix_expression() {
-  std::function<Ast_Postfix_Expression *()> parse_postfix_ext =
-      [this, &parse_postfix_ext]() -> Ast_Postfix_Expression * {
-    auto pf = AST_NEW(Ast_Postfix_Expression);
-    if (tok.Type == token::LEFT_BRACKET) {
-      match_token(token::LEFT_BRACKET);
-      pf->flags = AST_PF_INDEX;
-      pf->int_expr = parse_expression();
-      match_token(token::RIGHT_BRACKET);
-      pf->expr = parse_postfix_ext();
-    } else if (tok.Type == token::DOT) {
-      match_token(token::DOT);
-      pf->flags = AST_PF_FIELD_SELECTION;
-      pf->expr = parse_postfix_expression();
-    } else if (tok.Type == token::INC_OP) {
-      match_token(token::INC_OP);
-      pf->flags = AST_PF_INC;
-    } else if (tok.Type == token::DEC_OP) {
-      match_token(token::DEC_OP);
-      pf->flags = AST_PF_DEC;
-    } else {
-      AST_DELETE(pf);
-      return nullptr;
-    }
-
-    return pf;
-  };
-
-  if (tok.Type == token::IDENTIFIER &&
-      lex->PeekToken().Type == token::LEFT_PAREN) {
-    auto fc = AST_NEW(Ast_Function_Call);
-    fc->my_ident = parse_ident();
-    match_token(token::LEFT_PAREN);
-    while (tok.Type != token::RIGHT_PAREN) {
-      fc->params.push(parse_expression());
-      if (tok.Type != token::COMMA)
-        break;
-      else
-        match_token(token::COMMA);
-    }
-    match_token(token::RIGHT_PAREN);
-    fc->expr = parse_postfix_ext();
-    return fc;
-  } else {
-    auto prime =
-        static_cast<Ast_Primary_Expression *>(parse_primary_expression());
-    if (prime)
-      prime->expr = parse_postfix_ext();
-    return prime;
-  }
-}
-
-Ast_Expression *Jai_Parser::parse_unary_expression() {
-  auto unary = AST_NEW(Ast_Unary_Expression);
-  switch (tok.Type) {
-  case token::PLUS:
-    match_token(tok.Type);
-    unary->flags = AST_UNARY_PLUS;
-    break;
-  case token::DASH:
-    match_token(tok.Type);
-    unary->flags = AST_UNARY_DASH;
-    break;
-  case token::BANG:
-    match_token(tok.Type);
-    unary->flags = AST_UNARY_BANG;
-    break;
-  case token::TILDE:
-    match_token(tok.Type);
-    unary->flags = AST_UNARY_TILDE;
-    break;
-  case token::STAR:
-    match_token(tok.Type);
-    unary->flags = AST_UNARY_DEREF;
-    break;
-  case token::AMPERSAND:
-    match_token(tok.Type);
-    unary->flags = AST_UNARY_REF;
-    break;
-  case token::INC_OP:
-    match_token(tok.Type);
-    unary->flags = AST_UNARY_INC;
-    break;
-  case token::DEC_OP:
-    match_token(tok.Type);
-    unary->flags = AST_UNARY_DEC;
-    break;
-  default:
-    AST_DELETE(unary);
-    return parse_postfix_expression();
-  }
-
-  unary->expr = parse_unary_expression();
-  return unary;
-}
-
-Ast_Expression *Jai_Parser::parse_multiplicative_expression() {
-  Ast_Expression *lexpr = parse_unary_expression();
-  auto mult = AST_NEW(Ast_Binary_Expression);
-  switch (tok.Type) {
-  case token::STAR:
-    mult->operation = AST_OPERATION_MULTIPLY;
-    break;
-  case token::SLASH:
-    mult->operation = AST_OPERATION_DIVIDE;
-    break;
-  case token::PERCENT:
-    mult->operation = AST_OPERATION_MODULO;
-    break;
-  default:
-    AST_DELETE(mult);
-    return lexpr;
-  }
-  match_token(tok.Type);
-  mult->lexpr = lexpr;
-  mult->rexpr = parse_multiplicative_expression();
-  return mult;
-}
-
-Ast_Expression *Jai_Parser::parse_expression() {
-  return parse_multiplicative_expression();
-}
-
-Ast_Statement *Jai_Parser::parse_statement() {
-  if (tok.Type == token::LEFT_BRACE) {
-    match_token(token::LEFT_BRACE);
-    auto stmt = AST_NEW(Ast_Statement);
-    stmt->flags = AST_STATEMENT_COMPOUND;
-    while (tok.Type != token::RIGHT_BRACE) {
-      stmt->scope.push_stmt(parse_statement());
-    }
-    match_token(token::RIGHT_BRACE);
-    return stmt;
-  } else if (tok.Type == token::IF) {
-
-  } else if (tok.Type == token::WHILE) {
-    match_token(token::WHILE);
-    auto iter = AST_NEW(Ast_Iteration_Statement);
-    iter->cond = parse_expression();
-    iter->stmt = parse_statement();
-    iter->stmt->scope.parent_scope = &iter->scope;
-    return iter;
-  } else if (tok.Type == token::DO) {
-
-  } else if (tok.Type == token::RETURN) {
-    match_token(token::RETURN);
-    auto stmt = parse_statement();
-    stmt->flags |= AST_STATEMENT_RETURN;
-    return stmt;
-  } else if (tok.Type == token::DEFER) {
-    match_token(token::DEFER);
-    auto stmt = parse_statement();
-    stmt->flags |= AST_STATEMENT_DEFER;
-    return stmt;
-  } else if (tok.Type == token::FOR) {
-
-  } else if (tok.Type == token::IDENTIFIER &&
-             (lex->PeekToken().Type == token::COLON_ASSIGN ||
-              lex->PeekToken().Type == token::TWO_COLONS ||
-              lex->PeekToken().Type == token::COLON)) {
-    return parse_declaration();
-  }
-
-  auto stmt = AST_NEW(Ast_Expression_Statement);
-  stmt->expr = parse_expression();
-  match_token(token::SEMICOLON);
-  return stmt;
-}
-
-Ast_Ident *Jai_Parser::parse_ident() {
-  Ast_Ident *ident = AST_NEW(Ast_Ident);
-  char *name = (char *)calloc(1, tok.Id.length() + 1);
-  memcpy(name, tok.Id.c_str(), tok.Id.length());
-  ident->my_name = name;
-  match_token(token::IDENTIFIER);
-  return ident;
-}
-
-Ast_Declaration *
-Jai_Parser::parse_declaration_attributes(Ast_Declaration *decl) {
-  decl->symbol_name = decl->my_ident->my_name;
-  if (tok.Type == token::HASH) {
-    match_token(token::HASH);
-    if (tok.Type == token::FOREIGN) {
-      match_token(token::FOREIGN);
-      decl->flags |= AST_DECLARATION_FOREIGN;
-      if (tok.Type == token::DQSTRING) {
-        char *str = (char *)calloc(1, tok.Id.length() + 1);
-        memcpy(str, tok.Id.c_str(), tok.Id.length());
-        decl->symbol_name = str;
-        match_token(token::DQSTRING);
-      }
-    }
-  }
-  return decl;
-}
-
-Ast_Declaration *Jai_Parser::parse_declaration() {
-  if (lex->PeekToken().Type == token::TWO_COLONS) {
-    return parse_lambda_definition();
-  }
-  Ast_Declaration *decl = AST_NEW(Ast_Declaration);
-  decl->my_ident = parse_ident();
-  if (tok.Type == token::COLON) {
-    match_token(token::COLON);
-    decl->my_type = parse_type();
-    if (tok.Type == token::EQUAL) {
-      match_token(token::EQUAL);
-      decl->expr = parse_expression();
-    }
-  } else if (tok.Type == token::COLON_ASSIGN) {
-    match_token(token::COLON_ASSIGN);
-    // do type inference
-    decl->expr = parse_expression();
-  }
-
-  return parse_declaration_attributes(decl);
-}
-
-Ast_Declaration *Jai_Parser::parse_external_declaration() {
-  if (lex->PeekToken().Type == token::TWO_COLONS) {
-    return parse_declaration();
-  }
-  auto decl = parse_declaration();
-  decl->flags |= AST_STATEMENT_DEFINITION;
-  match_token(token::SEMICOLON);
-  return decl;
-}
-
-Ast_Translation_Unit *Jai_Parser::parse_translation_unit(lexer_state *L) {
-  token tok;
-  char *filename = nullptr;
-  Ast_Translation_Unit *trans_unit = AST_NEW(Ast_Translation_Unit);
-  Jai_Parser parser;
-  parser.lex = L;
-  parser.match_token(parser.tok.Type);
-  parser.root_node = trans_unit;
-  while (parser.tok.Type != token::END) {
-    auto decl = parser.parse_external_declaration();
-    trans_unit->scope.push_stmt(decl);
-    auto symbol = trans_unit->scope.symbols.Lookup(decl->my_ident->my_name);
-    if (!symbol)
-      symbol = trans_unit->scope.symbols.Insert(
-          std::string(decl->my_ident->my_name), token::IDENTIFIER);
-    symbol->ast = decl;
-  }
-  return trans_unit;
-}
-
-struct C_Converter {
   Ast_Translation_Unit *trans_unit;
-  void emit_postfix_expression(Ast_Postfix_Expression *expr, std::ostream &os);
-  void emit_unary_expression(Ast_Expression *expr, std::ostream &os);
-  void emit_binary_expression(Ast_Expression *expr, std::ostream &os);
-  void emit_expression(Ast_Expression *expr, std::ostream &os);
-  void emit_statement(Ast_Statement *stmt, std::ostream &os);
-  void emit_type_info(Ast_Type_Info *info, std::ostream &os);
-  void emit_ident(Ast_Ident *ident, std::ostream &os);
-  void emit_declaration(Ast_Declaration *decl, std::ostream &os);
-  static void emit_translation_unit(Ast_Translation_Unit *tu, std::ostream &os);
+  struct mem_region {
+    char *array = nullptr;
+    int array_size = 0;
+    int array_pos = 0;
+
+    int alloc(int size) {
+      int index = array_pos;
+      array_pos += size;
+      if (array_pos >= array_size) {
+        char *new_array = (char *)malloc(array_size * 4);
+        memcpy(new_array, array, array_size);
+        free(array);
+        array = new_array;
+        array_size *= 4;
+      }
+      return array_pos;
+    }
+
+    void *get_slot(int slot) {
+      return *reinterpret_cast<char **>(array + (array_pos - (slot * sizeof(void *))));
+    }
+
+    void push(void *v) {
+      int index = alloc(sizeof(void *));
+      write_ptr(index, v);
+    }
+
+    void *pop() {
+      array_pos -= sizeof(void *);
+      return read_ptr(array_pos);
+    }
+
+    void write_ptr(int index, void *v) {
+      char **m = reinterpret_cast<char **>(array + index);
+      *m = (char *)v;
+    }
+
+    void *read_ptr(int index) {
+      return *reinterpret_cast<char **>(array + index);
+    }
+
+  } data_block, stack;
+
+
+
+  Jai_Interpreter() {
+    data_block.array = (char *)malloc(4096 * 16);
+    data_block.array_size = 4096 * 16;
+    stack.array = (char *)malloc(4096 * 16);
+    stack.array_size = 4096 * 16;
+    linked_libs.push(dlopen(0, RTLD_LAZY));
+  }
+
+  static u64 form_data_ref(u8 instr, u32 index) {
+    return instr | ((u64)index << 32);
+  }
+
+  int data_alloc(int size) { return data_block.alloc(size); }
+
+  void write32(int index, u32 v) {
+    u32 *m = reinterpret_cast<u32 *>(data_block.array + index);
+    *m = v;
+  }
+
+  void write_ptr(int index, void *v) {
+    char **m = reinterpret_cast<char **>(data_block.array + index);
+    *m = (char *)v;
+  }
+
+  void *read_ptr(int index) {
+    return *reinterpret_cast<char **>(data_block.array + index);
+  }
+
+  Function *find_func_by_name(const char *n) {
+    for (int i = 0; i < functions.count; ++i) {
+      auto func = functions.array[i];
+      if (strcmp(func->name, n) == 0) {
+        return func;
+      }
+    }
+    auto lambda = trans_unit->scope.lookup_function(n);
+    if (lambda) {
+      auto func = new Function();
+      func->name = lambda->symbol_name;
+      functions.push(func);
+      translate_function(lambda, func);
+      return func;
+    }
+    return nullptr;
+  }
+
+  void *find_native_func_by_name(const char *name) {
+    for (int i = 0; i < linked_libs.count; ++i) {
+      void *f = dlsym(linked_libs.array[i], name);
+      if (f)
+        return f;
+    }
+
+    return dlsym(0, name);
+  }
+
+  void report_error(const char *err);
+
+  void execute_function_call(u64 instr);
+  void execute_function(Function *func);
+
+  void translate_expression(Ast_Expression *expr,
+                            Jai_Interpreter::Function *func);
+  void translate_statement(Ast_Statement *stmt, Function *func);
+  void translate_scope(Ast_Scope *scope, Function *func);
+  void translate_function(Ast_Lambda *lambda, Function *func);
+  void translate_tree();
 };
 
-void C_Converter::emit_postfix_expression(Ast_Postfix_Expression *expr,
-                                          std::ostream &os) {
+inline void *__fastcall_c_func_sysv(void * (*native_func)(), void *reg_args[14],
+                                    int num_floats, int ext_argc, void **ext_args) {
+  asm ("mov %0, %%r9\n\t"
+      "mov (%%r9), %%rdi\n\t"
+      "mov 8(%%r9), %%rsi\n\t"
+       "mov 16(%%r9), %%rdx\n\t"
+       "mov 24(%%r9), %%rcx\n\t"
+       "mov 32(%%r9), %%r8\n\t"
+       "mov 40(%%r9), %%r9\n\t"
+   : : "g"(reg_args) : "%rdi", "%rdx", "%rsi", "%rcx", "%r8", "%r9");
+  // asm ( : : "g"() : );
+  // asm ("" : : "g"(reg_args[2]) : );
+  //
+  // asm ( : : "g"(reg_args[3]) : );
+  // asm ( : : "g"(reg_args[4]) : );
+  // asm ( : : "g"(reg_args[5]) : );
+
+  asm volatile("mov %0, %%xmm0" : : "g"(reg_args[6]) : "%xmm0");
+  asm volatile("mov %0, %%xmm1" : : "g"(reg_args[7]) : "%xmm1");
+  asm volatile("mov %0, %%xmm2" : : "g"(reg_args[8]) : "%xmm2");
+  asm volatile("mov %0, %%xmm3" : : "g"(reg_args[9]) : "%xmm3");
+  asm volatile("mov %0, %%xmm4" : : "g"(reg_args[10]) : "%xmm4");
+  asm volatile("mov %0, %%xmm5" : : "g"(reg_args[11]) : "%xmm5");
+  asm volatile("mov %0, %%xmm6" : : "g"(reg_args[12]) : "%xmm6");
+  asm volatile("mov %0, %%xmm7" : : "g"(reg_args[13]) : "%xmm7");
+  asm volatile("mov %0, %%al" : : "g"(num_floats) : "%al");
+
+  // for (int i = 0; i < ext_argc; ++i) {
+  //
+  // }
+
+  void *ret = native_func();
+
+  return ret;
+}
+
+void Jai_Interpreter::execute_function_call(u64 instr) {
+  auto fc = reinterpret_cast<Ast_Function_Call *>(
+      read_ptr((instr >> 32) & 0xFFFFFFFF));
+  auto lambda = trans_unit->scope.lookup_function(fc->my_ident->my_name);
+  printf("CALL FUNC %s\n", fc->my_ident->my_name);
+  if (lambda->flags & AST_DECLARATION_FOREIGN) {
+    void *(*native_func)() = reinterpret_cast<void *(*)()>(
+        find_native_func_by_name(lambda->symbol_name));
+    void *regs[14] = {};
+    printf("PARAM COUNT %d\n", fc->params.count);
+    for (int i = 0; i < 6 && i < fc->params.count; ++i) {
+      regs[i] = stack.get_slot(fc->params.count - (i + 1));
+    }
+    // for (int i = 1; i < 6; ++i) {
+    //   regs[2] = regs[0];
+    // }
+    // for (int i = 0; i < fc->params.count; ++i) {
+    //   stack.pop();
+    // }
+    __fastcall_c_func_sysv(native_func, regs, 0, 0, nullptr);
+  } else {
+    Function *func = find_func_by_name(lambda->my_ident->my_name);
+    execute_function(func);
+  }
+}
+
+void Jai_Interpreter::execute_function(Jai_Interpreter::Function *func) {
+  for (int i = 0; i < func->instrs.count; ++i) {
+    u64 instr = func->instrs.array[i];
+    switch (instr & 0xFF) {
+    case INSTR_CALL:
+      execute_function_call(instr);
+      break;
+    case INSTR_PUSH: {
+      void *val = read_ptr((instr >> 32) & 0xFFFFFFFF);
+      stack.push(val);
+      break;
+    }
+    case INSTR_POP:
+      stack.pop();
+      break;
+    }
+  }
+}
+
+void Jai_Interpreter::translate_expression(Ast_Expression *expr,
+                                           Jai_Interpreter::Function *func) {
   if (expr->type == AST_FUNCTION_CALL) {
     auto fc = static_cast<Ast_Function_Call *>(expr);
-    os << trans_unit->scope.lookup_function(fc->my_ident->my_name)->symbol_name
-       << "(";
+    int index = data_alloc(sizeof(fc));
+    write_ptr(index, fc);
     for (int i = 0; i < fc->params.count; ++i) {
       auto param = fc->params.array[i];
-      emit_expression(param, os);
-      if (i < fc->params.count - 1) {
-        os << ", ";
-      }
+      translate_expression(param, func);
     }
-    os << ")";
+    func->instrs.push(form_data_ref(INSTR_CALL, index));
+    printf("Function call to %s\n", fc->my_ident->my_name);
   } else if (expr->type == AST_PRIMARY_EXPRESSION) {
     auto pe = static_cast<Ast_Primary_Expression *>(expr);
     switch (pe->expr_type) {
     case AST_PT_CONST_INT:
-      os << pe->int_const;
+    case AST_PT_CONST_BOOL: {
+      int index = data_alloc(sizeof(u64));
+      write_ptr(index, reinterpret_cast<void *>(pe->int_const));
+      func->instrs.push(form_data_ref(INSTR_PUSH, index));
+      printf("PUSH INT %llu\n", pe->int_const);
       break;
-    case AST_PT_CONST_BOOL:
-      os << (pe->int_const ? "true" : "false");
+    }
+    case AST_PT_CONST_FLOAT: {
+      int index = data_alloc(sizeof(double));
+      write_ptr(index, reinterpret_cast<void *>(*reinterpret_cast<u64*>(&pe->float_const)));
+      func->instrs.push(form_data_ref(INSTR_PUSH, index));
+      printf("PUSH FLOAT %f\n", pe->float_const);
       break;
-    case AST_PT_CONST_FLOAT:
-      os << pe->float_const;
+    }
+    case AST_PT_STRING_LITERAL: {
+      int index = data_alloc(sizeof(char *));
+      write_ptr(index, pe->string_literal.array);
+      func->instrs.push(form_data_ref(INSTR_PUSH, index));
+      printf("PUSH STRING %s\n", pe->string_literal.array);
       break;
-    case AST_PT_STRING_LITERAL:
-      os << "\"";
-      for (int i = 0; i < pe->string_literal.count; ++i) {
-        switch (pe->string_literal.array[i]) {
-        case '\n':
-          os << "\\n";
-          break;
-        case '\r':
-          os << "\\r";
-          break;
-        case '\t':
-          os << "\\t";
-          break;
-        case '\'':
-          os << "\\'";
-          break;
-        default:
-          os << pe->string_literal.array[i];
-        }
-      }
-      os << "\"";
-      break;
+    }
     case AST_PT_IDENTIFIER:
-      os << pe->ident->my_name;
+      // TODO get identifier register
       break;
     case AST_PT_PAREN:
-      os << "(";
-      emit_expression(pe->nested_expr, os);
-      os << ")";
+      translate_expression(pe->nested_expr, func);
       break;
     }
   }
+}
 
-  if (expr->flags == AST_PF_DEC) {
-    os << "--";
-  } else if (expr->flags == AST_PF_INC) {
-    os << "++";
-  } else if (expr->flags == AST_PF_INDEX) {
-    os << "[";
-    emit_expression(expr->int_expr, os);
-    os << "]";
-    emit_expression(expr->expr, os);
-  } else if (expr->flags == AST_PF_FIELD_SELECTION) {
-    os << ".";
-    emit_expression(expr->expr, os);
-  } else {
-    emit_expression(expr->expr, os);
+void Jai_Interpreter::translate_statement(Ast_Statement *stmt,
+                                          Jai_Interpreter::Function *func) {
+  if (stmt->type == AST_EXPRESSION_STATEMENT) {
+    translate_expression(stmt->expr, func);
   }
 }
 
-void C_Converter::emit_unary_expression(Ast_Expression *expr,
-                                        std::ostream &os) {
-  if (expr->type == AST_UNARY_EXPRESSION) {
-    auto unary = static_cast<Ast_Unary_Expression *>(expr);
-    switch (unary->flags) {
-    case AST_UNARY_REF:
-      os << "&";
-      break;
-    case AST_UNARY_DEREF:
-      os << "*";
-      break;
-    case AST_UNARY_PLUS:
-      os << "+";
-      break;
-    case AST_UNARY_DASH:
-      os << "-";
-      break;
-    case AST_UNARY_BANG:
-      os << "!";
-      break;
-    case AST_UNARY_TILDE:
-      os << "~";
-      break;
-    case AST_UNARY_INC:
-      os << "++";
-      break;
-    case AST_UNARY_DEC:
-      os << "--";
-      break;
+void Jai_Interpreter::translate_scope(Ast_Scope *scope,
+                                      Jai_Interpreter::Function *func) {
+  bool returned = false;
+  for (int i = 0; i < scope->stmts.count; ++i) {
+    auto stmt = scope->stmts.array[i];
+    if (stmt->flags & AST_STATEMENT_RETURN) {
+      for (int i = scope->stmts.count - 1; i >= 0; --i) {
+        auto s = scope->stmts.array[i];
+        if (s->flags & AST_STATEMENT_DEFER)
+          translate_statement(s, func);
+      }
+      returned = true;
     }
-    if (unary->expr)
-      emit_unary_expression(unary->expr, os);
-  } else {
-    emit_postfix_expression(static_cast<Ast_Postfix_Expression *>(expr), os);
+    auto s = scope->stmts.array[i];
+    if ((s->flags & AST_STATEMENT_DEFER) == 0)
+      translate_statement(stmt, func);
   }
-}
-
-void C_Converter::emit_binary_expression(Ast_Expression *expr,
-                                         std::ostream &os) {
-  if (expr->type == AST_BINARY_EXPRESSION) {
-    auto bin = static_cast<Ast_Binary_Expression *>(expr);
-    emit_expression(bin->lexpr, os);
-    switch (bin->operation) {
-    case AST_OPERATION_MODULO:
-      os << " %% ";
-      break;
-    case AST_OPERATION_DIVIDE:
-      os << " / ";
-      break;
-    case AST_OPERATION_MULTIPLY:
-      os << " * ";
-      break;
+  if (!returned) {
+    for (int i = scope->stmts.count - 1; i >= 0; --i) {
+      auto s = scope->stmts.array[i];
+      if (s->flags & AST_STATEMENT_DEFER)
+        translate_statement(scope->stmts.array[i], func);
     }
-    emit_expression(bin->rexpr, os);
-  } else {
-    emit_unary_expression(expr, os);
   }
 }
 
-void C_Converter::emit_expression(Ast_Expression *expr, std::ostream &os) {
-  if (!expr)
-    return;
-  emit_binary_expression(expr, os);
+void Jai_Interpreter::translate_function(Ast_Lambda *lambda,
+                                         Jai_Interpreter::Function *func) {
+  translate_scope(&lambda->scope, func);
 }
 
-void C_Converter::emit_statement(Ast_Statement *stmt, std::ostream &os) {
-  if (stmt->type == AST_ITERATION_STATEMENT) {
-    auto iter = static_cast<Ast_Iteration_Statement *>(stmt);
-    os << "while ";
-    emit_expression(iter->cond, os);
-    emit_statement(iter->stmt, os);
-    return;
-  } else if (stmt->type == AST_DECLARATION) {
-    emit_declaration(static_cast<Ast_Declaration *>(stmt), os);
-    return;
-  }
-  if (stmt->flags & AST_STATEMENT_RETURN) {
-    os << "return ";
-  } else if (stmt->flags & AST_STATEMENT_COMPOUND) {
-    os << "{" << std::endl;
-    for (int i = 0; i < stmt->scope.stmts.count; ++i) {
-      emit_statement(stmt->scope.stmts.array[i], os);
-    }
-    for (int i = stmt->scope.defered_stmts.count - 1; i >= 0; --i) {
-      emit_statement(stmt->scope.defered_stmts.array[i], os);
-    }
-    os << "}" << std::endl;
-    return;
-  }
-  emit_expression(stmt->expr, os);
-  os << ";" << std::endl;
-}
-
-void C_Converter::emit_type_info(Ast_Type_Info *info, std::ostream &os) {
-  switch (info->atom_type) {
-  case AST_TYPE_VOID:
-    os << "void";
-    break;
-  case AST_TYPE_INT:
-    os << "s32";
-    break;
-  case AST_TYPE_BOOL:
-    os << "bool";
-    break;
-  case AST_TYPE_FLOAT:
-    os << "float32";
-    break;
-  case AST_TYPE_DOUBLE:
-    os << "float64";
-    break;
-  case AST_TYPE_CHAR:
-    os << "char";
-    break;
-  case AST_TYPE_TYPENAME:
-    // lookup
-    break;
-  case AST_TYPE_VARIADIC:
-    os << "...";
-    break;
-  case AST_TYPE_POINTER:
-    emit_type_info(info->expanded_info, os);
-    os << "*";
-    break;
-  }
-  os << " ";
-}
-
-void C_Converter::emit_ident(Ast_Ident *ident, std::ostream &os) {
-  os << ident->my_name;
-}
-
-void C_Converter::emit_declaration(Ast_Declaration *decl, std::ostream &os) {
-  if (decl->type == AST_LAMDA) {
-    auto lambda = static_cast<Ast_Lambda *>(decl);
-    emit_type_info(lambda->my_type, os);
-    if (lambda->flags & AST_DECLARATION_FOREIGN) {
-      if (lambda->symbol_name)
-        os << lambda->symbol_name;
-      else
-        os << lambda->my_ident->my_name; // unmangled name
+void Jai_Interpreter::translate_tree() {
+  for (int i = 0; i < trans_unit->scope.stmts.count; ++i) {
+    auto stmt = trans_unit->scope.stmts.array[i];
+    if (stmt->type == AST_LAMDA) {
+      Function *func = new Function();
+      auto lambda = static_cast<Ast_Lambda *>(stmt);
+      func->name = lambda->my_ident->my_name;
+      translate_function(lambda, func);
+      functions.push(func);
     } else {
-      emit_ident(lambda->my_ident, os);
-    }
-    os << "(";
-    for (int i = 0; i < lambda->params.count; ++i) {
-      auto param = lambda->params.array[i];
-      emit_declaration(param, os);
-      if (i < lambda->params.count - 1) {
-        os << ", ";
-      }
-    }
-    os << ")";
-    if ((lambda->flags & AST_STATEMENT_DEFINITION) == 0) {
-      os << ";" << std::endl;
-      return;
-    }
-    os << " {" << std::endl;
-    bool returned = false;
-    for (int i = 0; i < lambda->scope.stmts.count; ++i) {
-      auto stmt = lambda->scope.stmts.array[i];
-      if (stmt->flags & AST_STATEMENT_RETURN) {
-        for (int i = lambda->scope.defered_stmts.count - 1; i >= 0; --i) {
-          emit_statement(lambda->scope.defered_stmts.array[i], os);
-        }
-        returned = true;
-      }
-      emit_statement(stmt, os);
-    }
-    if (!returned) {
-      for (int i = lambda->scope.defered_stmts.count - 1; i >= 0; --i) {
-        emit_statement(lambda->scope.defered_stmts.array[i], os);
-      }
-    }
-    os << "}" << std::endl;
-  } else {
-    emit_type_info(decl->my_type, os);
-    if (decl->my_type->atom_type != AST_TYPE_VARIADIC) {
-      emit_ident(decl->my_ident, os);
-    }
-    if (decl->expr) {
-      os << " = ";
-      emit_expression(decl->expr, os);
-    }
-    if (decl->flags & AST_STATEMENT_DEFINITION) {
-      os << ";" << std::endl;
+      // TODO
     }
   }
 }
 
-void C_Converter::emit_translation_unit(Ast_Translation_Unit *tu,
-                                        std::ostream &os) {
-  os.precision(5);
-  os << std::fixed;
-  os << "/* machinamentum jai compiler v0.0.1 */" << std::endl;
-  os << "#include <stdint.h>" << std::endl;
-  os << "#include <stdbool.h>" << std::endl;
-  os << "typedef int32_t s32;" << std::endl;
-  os << "typedef int64_t s64;" << std::endl;
-  os << "typedef uint32_t u32;" << std::endl;
-  os << "typedef uint64_t u64;" << std::endl;
-  os << "typedef float float32;" << std::endl;
-  os << "typedef double float64;" << std::endl;
-  C_Converter c;
-  c.trans_unit = tu;
-  for (int i = 0; i < tu->scope.stmts.count; ++i) {
-    auto decl = static_cast<Ast_Declaration *>(tu->scope.stmts.array[i]);
-    c.emit_declaration(decl, os);
-  }
-}
+extern "C" {
+void test_func() { printf("TEST FUNC\n\n"); }
+};
 
 int main(int argc, char **argv) {
   bool PrintTrees = false;
-  bool OutputASM = false;
+  bool output_llvm = false;
   char *InputFilePath = nullptr;
   char *OutputFilePath = nullptr;
   for (int i = 1; i < argc; ++i) {
@@ -1118,8 +417,8 @@ int main(int argc, char **argv) {
       PrintTrees = true;
     } else if (strcmp(argv[i], "-o") == 0) {
       OutputFilePath = argv[++i];
-    } else if (strcmp(argv[i], "-S") == 0) {
-      OutputASM = true;
+    } else if (strcmp(argv[i], "-emit-llvm") == 0) {
+      output_llvm = true;
     } else {
       if (!InputFilePath) {
         InputFilePath = argv[i];
@@ -1140,22 +439,25 @@ int main(int argc, char **argv) {
   }
   LexerInit(&Lexer, Source, Source + Size);
   Ast_Translation_Unit *trans_unit = Jai_Parser::parse_translation_unit(&Lexer);
-  Jai_Interpreter interp;
-  for (int i = 0; i < trans_unit->hashes.count; ++i) {
-    auto hash = trans_unit->hashes.array[i];
-    if (hash->type == AST_HASH_RUN) {
-      auto run = static_cast<Ast_Hash_Run *>(hash);
-      auto lambda =
-          trans_unit->scope.lookup_function(run->fc->my_ident->my_name);
-      interp.run_function(lambda);
-    }
-  }
+
+  Jai_Interpreter *interp = new Jai_Interpreter();
+  interp->trans_unit = trans_unit;
+  interp->translate_tree();
+  interp->execute_function(interp->find_func_by_name("main"));
   if (OutputFilePath) {
     std::ofstream fs;
     fs.open(OutputFilePath);
-    C_Converter::emit_translation_unit(trans_unit, fs);
+    if (output_llvm) {
+      // LLVM_Converter::emit_translation_unit(trans_unit, fs);
+    } else {
+      C_Converter::emit_translation_unit(trans_unit, fs);
+    }
   } else {
-    C_Converter::emit_translation_unit(trans_unit, std::cout);
+    if (output_llvm) {
+      // LLVM_Converter::emit_translation_unit(trans_unit, std::cout);
+    } else {
+      C_Converter::emit_translation_unit(trans_unit, std::cout);
+    }
   }
   return 0;
 }

@@ -6,7 +6,8 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -g")
 
 
 file(GLOB jai_SRC
-    "source/*.cpp"
+    "source/lexer.cpp"
+    "source/symbol.cpp"
 )
 
 file(GLOB driver_SRC
@@ -14,4 +15,4 @@ file(GLOB driver_SRC
 )
 
 add_executable(jai ${driver_SRC} ${jai_SRC})
-target_include_directories (jai PUBLIC include)
+target_include_directories (jai PUBLIC include source)
