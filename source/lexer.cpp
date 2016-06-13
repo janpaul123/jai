@@ -90,6 +90,29 @@ _CheckWhiteSpace:
         ++Current;
       }
       goto _CheckWhiteSpace;
+    } else if (Current[1] == '*') {
+      int depth = 1;
+      Current += 2;
+      while (Current < State->EndPtr) {
+        if (Current[0] == '*' && Current[1] == '/') {
+          --depth;
+          ++Current;
+          ++State->OffsetCurrent;
+        } else if (Current[0] == '/' && Current[1] == '*') {
+          ++depth;
+          ++Current;
+          ++State->OffsetCurrent;
+        }
+        ++State->OffsetCurrent;
+        ++Current;
+        if (Current[0] == '\n') {
+          ++State->LineCurrent;
+          State->OffsetCurrent = 0;
+        }
+        if (depth == 0)
+          break;
+      }
+      goto _CheckWhiteSpace;
     }
   }
 
@@ -99,13 +122,14 @@ _CheckWhiteSpace:
   };
 
   static auto IsAsciiLetterOrNumber = [](char C) {
-    return ((C >= '0') && (C <= '9')) ||
-           ((C >= 'A') && (C <= 'Z')) || ((C >= 'a') && (C <= 'z'));
+    return ((C >= '0') && (C <= '9')) || ((C >= 'A') && (C <= 'Z')) ||
+           ((C >= 'a') && (C <= 'z'));
   };
 
   if (IsAsciiLetter(Current[0])) {
     char *End = Current + 1;
-    while ((IsAsciiLetterOrNumber(*End) || (*End == '_')) && (End < State->EndPtr)) {
+    while ((IsAsciiLetterOrNumber(*End) || (*End == '_')) &&
+           (End < State->EndPtr)) {
       ++End;
     }
     std::string TheID = std::string(Current, End - Current);
