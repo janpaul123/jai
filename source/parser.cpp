@@ -70,7 +70,6 @@ enum {
   AST_TYPE_POINTER,
   AST_TYPE_NULLPTR,
   AST_TYPE_ERROR,
-  AST_TYPE_AUTO,
 };
 
 struct Ast_Struct : public Ast {
@@ -267,6 +266,7 @@ struct Jai_Parser {
   void report_error(const char *fmt, ...);
   void report_error(Ast *ast, const char *fmt, ...);
   void report_note(Ast *ast, const char *fmt, ...);
+  void report_warning(Ast *ast, const char *fmt, ...);
 
   Ast_Type_Info *typecheck_primary_expression(Ast_Expression *expr);
   Ast_Type_Info *typecheck_postfix_expression(Ast_Expression *expr);
@@ -354,6 +354,8 @@ Ast_Type_Info *Jai_Parser::typecheck_primary_expression(Ast_Expression *expr) {
 }
 
 static bool type_info_equal(Ast_Type_Info *i0, Ast_Type_Info *i1) {
+  if (!i0 || !i1)
+    return false;
   if (i0->atom_type == AST_TYPE_POINTER && i1->atom_type == AST_TYPE_NULLPTR) {
     return true;
   }
@@ -422,10 +424,18 @@ Ast_Type_Info *Jai_Parser::typecheck_postfix_expression(Ast_Expression *expr) {
       Ast_Type_Info *pinfo = typecheck_expression(param);
       Ast_Type_Info *ainfo = lambda->params.array[i]->my_type;
       if (!type_info_equal(pinfo, ainfo)) {
-        if (pinfo->atom_type == AST_TYPE_AUTO) {
+        if (param->type == AST_CAST_EXPRESSION) {
           auto cast = static_cast<Ast_Cast_Expression *>(param);
-          cast->inferred_type = ainfo;
-          cast->expr->inferred_type = ainfo;
+          if (cast->flags & AST_AUTOCAST) {
+            cast->cast_type = ainfo;
+            if (type_info_equal(cast->expr->inferred_type, ainfo)) {
+              report_warning(
+                  cast,
+                  "target type of autocast is same as source type (%s, %s)",
+                  type_info_to_string(cast->expr->inferred_type).c_str(),
+                  type_info_to_string(ainfo).c_str());
+            }
+          }
         } else {
           report_error(param, "nonmatching types for function parameter %d "
                               "(requires %s, given %s)",
@@ -455,7 +465,8 @@ Ast_Type_Info *Jai_Parser::typecheck_postfix_expression(Ast_Expression *expr) {
 Ast_Type_Info *Jai_Parser::typecheck_unary_expression(Ast_Expression *expr) {
   if (expr->type == AST_CAST_EXPRESSION) {
     auto cast = static_cast<Ast_Cast_Expression *>(expr);
-    expr->inferred_type = cast->cast_type;
+    typecheck_unary_expression(cast->expr);
+    cast->inferred_type = nullptr;
     return expr->inferred_type;
   } else if (expr->type == AST_UNARY_EXPRESSION) {
     auto un = static_cast<Ast_Unary_Expression *>(expr);
@@ -733,19 +744,17 @@ Ast_Expression *Jai_Parser::parse_postfix_expression() {
 
 Ast_Expression *Jai_Parser::parse_unary_expression() {
   if (tok.Type == token::CAST) {
-    match_token(token::CAST);
     auto cast = AST_NEW(Ast_Cast_Expression);
+    match_token(token::CAST);
     match_token(token::LEFT_PAREN);
     cast->cast_type = parse_type();
     match_token(token::RIGHT_PAREN);
     cast->expr = parse_unary_expression();
     return cast;
   } else if (tok.Type == token::AUTOCAST) {
-    match_token(token::AUTOCAST);
     auto cast = AST_NEW(Ast_Cast_Expression);
+    match_token(token::AUTOCAST);
     cast->flags |= AST_AUTOCAST;
-    cast->cast_type = AST_NEW(Ast_Type_Info);
-    cast->cast_type->atom_type = AST_TYPE_AUTO;
     cast->expr = parse_unary_expression();
     return cast;
   }
@@ -954,6 +963,18 @@ void Jai_Parser::report_note(Ast *ast, const char *fmt, ...) {
   va_start(args, fmt);
   std::string line = LexerGetLine(lex, ast->line_number);
   printf("\033[1m%s:%d:%d:\033[30;1mnote\e[0m: ", ast->filename,
+         ast->line_number, ast->line_offset);
+  vprintf(fmt, args);
+  va_end(args);
+  printf("\e[0m\n\033[0m%s\n", line.c_str());
+  printf("%*c^\n", ast->line_offset, ' ');
+}
+
+void Jai_Parser::report_warning(Ast *ast, const char *fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  std::string line = LexerGetLine(lex, ast->line_number);
+  printf("\033[1m%s:%d:%d:\033[1m\e[35mwarning\e[0m\033[1m: ", ast->filename,
          ast->line_number, ast->line_offset);
   vprintf(fmt, args);
   va_end(args);

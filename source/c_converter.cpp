@@ -100,17 +100,10 @@ void C_Converter::emit_unary_expression(Ast_Expression *expr,
                                         std::ostream &os) {
   if (expr->type == AST_CAST_EXPRESSION) {
     auto cast = static_cast<Ast_Cast_Expression *>(expr);
-    if (cast->flags & AST_AUTOCAST) {
-      os << "(";
-      emit_type_info(cast->expr->inferred_type, os);
-      os << ")";
-      emit_expression(cast->expr, os);
-    } else {
-      os << "(";
-      emit_type_info(cast->cast_type, os);
-      os << ")";
-      emit_expression(cast->expr, os);
-    }
+    os << "(";
+    emit_type_info(cast->cast_type, os);
+    os << ")";
+    emit_expression(cast->expr, os);
   } else if (expr->type == AST_UNARY_EXPRESSION) {
     auto unary = static_cast<Ast_Unary_Expression *>(expr);
     switch (unary->flags) {
