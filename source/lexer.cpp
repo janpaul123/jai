@@ -39,6 +39,12 @@ void LexerInit(lexer_state *State, char *Source, char *End) {
   State->Table->Insert("defer", token::DEFER);
   State->Table->Insert("while", token::WHILE);
   State->Table->Insert("foreign", token::FOREIGN);
+  State->Table->Insert("cast", token::CAST);
+  State->Table->Insert("xx", token::AUTOCAST);
+  State->Table->Insert("true", token::BOOLCONSTANT);
+  State->Table->Insert("false", token::BOOLCONSTANT);
+  State->Table->Insert("null", token::NULLPTR);
+  State->Table->Insert("void", token::VOID);
 }
 
 token LexerPeekToken(lexer_state *State) {
@@ -216,6 +222,8 @@ _CheckWhiteSpace:
   };
   if (Current[0] == '\"') {
     ReturnToken.Type = token::DQSTRING;
+    ReturnToken.Line = State->LineCurrent;
+    ReturnToken.Offset = State->OffsetCurrent;
     char *End = Current + 1;
     while ((*End != '\"') && (End < State->EndPtr)) {
       switch (*End) {
@@ -235,8 +243,6 @@ _CheckWhiteSpace:
 
     State->OffsetCurrent += End - Current;
     Current = End + 1;
-    ReturnToken.Line = State->LineCurrent;
-    ReturnToken.Offset = State->OffsetCurrent;
     ++State->OffsetCurrent;
     goto _Exit;
   }

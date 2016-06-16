@@ -145,6 +145,8 @@ struct Jai_Interpreter {
     data_block.array_size = 4096 * 16;
     stack.array = (char *)malloc(4096 * 16);
     stack.array_size = 4096 * 16;
+    data_block.alloc(4);
+    stack.alloc(4);
     linked_libs.push(dlopen(0, RTLD_LAZY));
   }
 
@@ -303,6 +305,10 @@ void Jai_Interpreter::translate_expression(Ast_Expression *expr,
   } else if (expr->type == AST_PRIMARY_EXPRESSION) {
     auto pe = static_cast<Ast_Primary_Expression *>(expr);
     switch (pe->expr_type) {
+    case AST_PT_NULL: {
+      func->instrs.push(form_data_ref(INSTR_PUSH, 0));
+      break;
+    }
     case AST_PT_CONST_INT:
     case AST_PT_CONST_BOOL: {
       int index = data_alloc(sizeof(u64));
@@ -419,10 +425,11 @@ int main(int argc, char **argv) {
     return -1;
   }
   LexerInit(&Lexer, Source, Source + Size);
-  Ast_Translation_Unit *trans_unit = Jai_Parser::parse_translation_unit(&Lexer);
-
+  Jai_Parser *parser = Jai_Parser::parse_translation_unit(&Lexer, InputFilePath);
+  if (parser->error_count)
+    return -1;
   Jai_Interpreter *interp = new Jai_Interpreter();
-  interp->trans_unit = trans_unit;
+  interp->trans_unit = parser->root_node;
   interp->translate_tree();
 
   if (OutputFilePath) {
@@ -431,13 +438,13 @@ int main(int argc, char **argv) {
     if (output_llvm) {
       // LLVM_Converter::emit_translation_unit(trans_unit, fs);
     } else {
-      C_Converter::emit_translation_unit(trans_unit, fs);
+      C_Converter::emit_translation_unit(parser->root_node, fs);
     }
   } else {
     if (output_llvm) {
       // LLVM_Converter::emit_translation_unit(trans_unit, std::cout);
     } else {
-      C_Converter::emit_translation_unit(trans_unit, std::cout);
+      C_Converter::emit_translation_unit(parser->root_node, std::cout);
     }
   }
   return 0;

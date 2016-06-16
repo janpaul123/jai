@@ -88,6 +88,9 @@ struct token {
     DELETE,
     DEFER,
     FOREIGN,
+    CAST,
+    AUTOCAST,
+    NULLPTR,
 
     IDENTIFIER,
     TYPE_NAME,

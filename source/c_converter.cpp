@@ -1,6 +1,8 @@
 
 struct C_Converter {
   Ast_Translation_Unit *trans_unit;
+  int indent_depth = 0;
+
   void emit_postfix_expression(Ast_Postfix_Expression *expr, std::ostream &os);
   void emit_unary_expression(Ast_Expression *expr, std::ostream &os);
   void emit_binary_expression(Ast_Expression *expr, std::ostream &os);
@@ -29,6 +31,9 @@ void C_Converter::emit_postfix_expression(Ast_Postfix_Expression *expr,
   } else if (expr->type == AST_PRIMARY_EXPRESSION) {
     auto pe = static_cast<Ast_Primary_Expression *>(expr);
     switch (pe->expr_type) {
+    case AST_PT_NULL:
+      os << "NULL";
+      break;
     case AST_PT_CONST_INT:
       os << pe->int_const;
       break;
@@ -93,7 +98,20 @@ void C_Converter::emit_postfix_expression(Ast_Postfix_Expression *expr,
 
 void C_Converter::emit_unary_expression(Ast_Expression *expr,
                                         std::ostream &os) {
-  if (expr->type == AST_UNARY_EXPRESSION) {
+  if (expr->type == AST_CAST_EXPRESSION) {
+    auto cast = static_cast<Ast_Cast_Expression *>(expr);
+    if (cast->flags & AST_AUTOCAST) {
+      os << "(";
+      emit_type_info(cast->expr->inferred_type, os);
+      os << ")";
+      emit_expression(cast->expr, os);
+    } else {
+      os << "(";
+      emit_type_info(cast->cast_type, os);
+      os << ")";
+      emit_expression(cast->expr, os);
+    }
+  } else if (expr->type == AST_UNARY_EXPRESSION) {
     auto unary = static_cast<Ast_Unary_Expression *>(expr);
     switch (unary->flags) {
     case AST_UNARY_REF:
@@ -156,7 +174,16 @@ void C_Converter::emit_expression(Ast_Expression *expr, std::ostream &os) {
   emit_binary_expression(expr, os);
 }
 
+static void print_depth(int indent_depth, std::ostream &os) {
+  for (int i = 0; i < indent_depth; ++i) {
+    os << "  ";
+  }
+}
+
 void C_Converter::emit_statement(Ast_Statement *stmt, std::ostream &os) {
+  if (stmt->expr || stmt->flags & AST_STATEMENT_COMPOUND) {
+    print_depth(indent_depth, os);
+  }
   if (stmt->type == AST_ITERATION_STATEMENT) {
     auto iter = static_cast<Ast_Iteration_Statement *>(stmt);
     os << "while ";
@@ -171,6 +198,7 @@ void C_Converter::emit_statement(Ast_Statement *stmt, std::ostream &os) {
     os << "return ";
   } else if (stmt->flags & AST_STATEMENT_COMPOUND) {
     os << "{" << std::endl;
+    indent_depth++;
     for (int i = 0; i < stmt->scope.stmts.count; ++i) {
       auto s = stmt->scope.stmts.array[i];
       if ((s->flags & AST_STATEMENT_DEFER) == 0)
@@ -181,6 +209,8 @@ void C_Converter::emit_statement(Ast_Statement *stmt, std::ostream &os) {
       if (s->flags & AST_STATEMENT_DEFER)
         emit_statement(s, os);
     }
+    indent_depth--;
+    print_depth(indent_depth, os);
     os << "}" << std::endl;
     return;
   }
@@ -209,7 +239,7 @@ void C_Converter::emit_type_info(Ast_Type_Info *info, std::ostream &os) {
     os << "char";
     break;
   case AST_TYPE_TYPENAME:
-    // lookup
+    os << "typename";
     break;
   case AST_TYPE_VARIADIC:
     os << "...";
@@ -218,6 +248,8 @@ void C_Converter::emit_type_info(Ast_Type_Info *info, std::ostream &os) {
     emit_type_info(info->expanded_info, os);
     os << "*";
     break;
+  default:
+    os << "type:" << info->atom_type;
   }
   os << " ";
 }
@@ -252,6 +284,7 @@ void C_Converter::emit_declaration(Ast_Declaration *decl, std::ostream &os) {
       return;
     }
     os << " {" << std::endl;
+    indent_depth++;
     bool returned = false;
     for (int i = 0; i < lambda->scope.stmts.count; ++i) {
       auto stmt = lambda->scope.stmts.array[i];
@@ -273,6 +306,7 @@ void C_Converter::emit_declaration(Ast_Declaration *decl, std::ostream &os) {
           emit_statement(lambda->scope.stmts.array[i], os);
       }
     }
+    indent_depth--;
     os << "}" << std::endl;
   } else {
     emit_type_info(decl->my_type, os);
@@ -302,6 +336,7 @@ void C_Converter::emit_translation_unit(Ast_Translation_Unit *tu,
   os << "typedef uint64_t u64;" << std::endl;
   os << "typedef float float32;" << std::endl;
   os << "typedef double float64;" << std::endl;
+  os << "void *NULL = 0;" << std::endl;
   C_Converter c;
   c.trans_unit = tu;
   for (int i = 0; i < tu->scope.stmts.count; ++i) {
